@@ -1,0 +1,665 @@
+"use client";
+
+import {
+  Activity,
+  AlertTriangle,
+  Archive,
+  ArrowRight,
+  BarChart3,
+  Boxes,
+  CalendarDays,
+  Check,
+  ChevronRight,
+  CircleDollarSign,
+  ClipboardCheck,
+  Clock3,
+  Command,
+  FileText,
+  FlaskConical,
+  Gauge,
+  History,
+  LayoutDashboard,
+  Menu,
+  PackageCheck,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Truck,
+  Users,
+  Wrench,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  assignWorkOrder,
+  availableQuantity,
+  createScenario,
+  recommendTechnicians,
+  reserveRequiredParts,
+  scenarioCatalog,
+  technicianName,
+  transitionWorkOrder,
+  type ScenarioId,
+} from "@/domain/operations";
+import { calculateMetrics, formatCurrency, metricDefinitions } from "@/domain/metrics";
+import { createSeedSession } from "@/domain/seed";
+import { loadSession, saveSession } from "@/domain/session";
+import type {
+  DemoSession,
+  OperationalState,
+  Priority,
+  WorkOrder,
+  WorkOrderStatus,
+} from "@/domain/types";
+
+type View =
+  | "Overview"
+  | "Work Orders"
+  | "Dispatch"
+  | "Inventory"
+  | "Scenario Lab"
+  | "Analytics"
+  | "Activity"
+  | "Portfolio";
+
+const navItems = [
+  { label: "Overview" as const, icon: LayoutDashboard },
+  { label: "Work Orders" as const, icon: FileText },
+  { label: "Dispatch" as const, icon: Truck },
+  { label: "Inventory" as const, icon: Boxes },
+  { label: "Scenario Lab" as const, icon: FlaskConical },
+  { label: "Analytics" as const, icon: BarChart3 },
+  { label: "Activity" as const, icon: Activity },
+  { label: "Portfolio" as const, icon: Archive },
+];
+
+const nextStatus: Partial<Record<WorkOrderStatus, WorkOrderStatus>> = {
+  SCHEDULED: "DISPATCHED",
+  DISPATCHED: "IN_PROGRESS",
+  IN_PROGRESS: "WORK_COMPLETED",
+  WORK_COMPLETED: "QUALITY_REVIEW",
+  QUALITY_REVIEW: "CLOSED",
+};
+
+function label(value: string) {
+  return value.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function time(value?: string) {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "America/New_York",
+  }).format(new Date(value));
+}
+
+function shortDate(value?: string) {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "America/New_York",
+  }).format(new Date(value));
+}
+
+function Status({ value }: { value: string }) {
+  return <span className={`status status-${value.toLowerCase()}`}>{label(value)}</span>;
+}
+
+function PriorityTag({ value }: { value: Priority }) {
+  return <span className={`priority priority-${value.toLowerCase()}`}>{label(value)}</span>;
+}
+
+function EmptyState({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="empty-state">
+      <Command aria-hidden="true" />
+      <strong>{title}</strong>
+      <p>{body}</p>
+    </div>
+  );
+}
+
+function Kpi({ label: title, value, detail, icon: Icon }: { label: string; value: string; detail: string; icon: typeof Gauge }) {
+  return (
+    <div className="kpi">
+      <Icon aria-hidden="true" />
+      <div>
+        <span>{title}</span>
+        <strong>{value}</strong>
+        <small>{detail}</small>
+      </div>
+    </div>
+  );
+}
+
+function DispatchTimeline({ state }: { state: OperationalState }) {
+  const technicians = state.technicians
+    .filter((technician) => technician.assignments.length > 0 || technician.status === "AVAILABLE")
+    .slice(0, 6);
+  return (
+    <section className="panel dispatch-panel" aria-labelledby="dispatch-title">
+      <div className="panel-heading">
+        <div>
+          <span className="heading-icon"><CalendarDays /></span>
+          <div>
+            <h2 id="dispatch-title">Today&apos;s dispatch</h2>
+            <p>Mon, Oct 26 · Eastern time</p>
+          </div>
+        </div>
+        <span className="quiet-action">7 AM — 6 PM</span>
+      </div>
+      <div className="timeline-grid">
+        <div className="timeline-hours" aria-hidden="true">
+          <span />
+          {[8, 9, 10, 11, 12, 1, 2, 3, 4, 5].map((hour) => <span key={hour}>{hour} {hour < 7 ? "PM" : "AM"}</span>)}
+        </div>
+        {technicians.map((technician, rowIndex) => (
+          <div className="timeline-row" key={technician.id}>
+            <div className="tech-cell">
+              <span className="avatar">{technician.name.split(" ").map((part) => part[0]).join("")}</span>
+              <div><strong>{technician.name}</strong><small>{technician.region} · {label(technician.status)}</small></div>
+            </div>
+            <div className="timeline-track">
+              {technician.assignments.slice(0, 3).map((assignment, index) => (
+                <div
+                  className={`job-block tone-${(rowIndex + index) % 3}`}
+                  key={assignment.workOrderId}
+                  style={{ left: `${7 + index * 31 + rowIndex * 2}%`, width: `${21 + index * 4}%` }}
+                >
+                  <strong>{assignment.workOrderId}</strong>
+                  <span>{time(assignment.start)}–{time(assignment.end)}</span>
+                </div>
+              ))}
+              {technician.assignments.length === 0 && <span className="available-slot">Available capacity</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ActivityRail({ state, limit = 7 }: { state: OperationalState; limit?: number }) {
+  return (
+    <section className="panel activity-rail" aria-labelledby="activity-title">
+      <div className="panel-heading compact-heading">
+        <div><span className="heading-icon"><History /></span><h2 id="activity-title">Daily activity</h2></div>
+        <span className="live-dot">Audit-backed</span>
+      </div>
+      <div className="activity-list">
+        {state.audit.slice(0, limit).map((event, index) => (
+          <div className="activity-item" key={event.id}>
+            <span className={`activity-node node-${index % 4}`} />
+            <time>{time(event.timestamp)}</time>
+            <div><strong>{label(event.type)}</strong><p>{event.entityId} · {event.detail}</p><small>{event.actor}</small></div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function OverviewView({
+  state,
+  onOpenOrder,
+}: {
+  state: OperationalState;
+  onOpenOrder: (id: string) => void;
+}) {
+  const metrics = calculateMetrics(state);
+  const attention = state.workOrders
+    .filter((order) => order.status !== "CLOSED" && order.status !== "CANCELLED")
+    .sort((a, b) => {
+      if (a.id === "WO-10483") return -1;
+      if (b.id === "WO-10483") return 1;
+      const weights = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+      return weights[b.priority] - weights[a.priority] || Date.parse(a.slaResolutionDue) - Date.parse(b.slaResolutionDue);
+    })
+    .slice(0, 5);
+  return (
+    <>
+      <section className="kpi-rail" aria-label="Operational KPIs">
+        <Kpi label="Open work orders" value={String(metrics.openWorkOrders)} detail={`${metrics.urgentWorkOrders} critical`} icon={FileText} />
+        <Kpi label="SLA risk" value={String(metrics.slaRisk)} detail={`${metrics.overdueJobs} overdue`} icon={AlertTriangle} />
+        <Kpi label="Technicians available" value={String(metrics.techniciansAvailable)} detail={`${metrics.techniciansAssigned} with assignments`} icon={Users} />
+        <Kpi label="First-time fix" value={`${metrics.firstTimeFixRate.toFixed(0)}%`} detail="eligible closed jobs" icon={Wrench} />
+        <Kpi label="Estimated revenue" value={formatCurrency(metrics.estimatedRevenueCents)} detail={`${formatCurrency(metrics.recognizedRevenueCents)} recognized`} icon={CircleDollarSign} />
+      </section>
+      <div className="overview-layout">
+        <div className="overview-main">
+          <section className="panel attention-panel">
+            <div className="panel-heading">
+              <div><span className="heading-icon danger"><AlertTriangle /></span><div><h2>Attention queue</h2><p>Highest-impact operational exceptions</p></div></div>
+              <button className="text-button" onClick={() => onOpenOrder(attention[0]?.id ?? "WO-10483")}>View work orders <ArrowRight /></button>
+            </div>
+            <div className="data-table-wrap">
+              <table className="data-table">
+                <thead><tr><th>Priority</th><th>Issue</th><th>Work order</th><th>Status</th><th>Resolution due</th><th><span className="sr-only">Open</span></th></tr></thead>
+                <tbody>
+                  {attention.map((order, index) => (
+                    <tr key={order.id} className={index === 0 ? "selected-row" : ""} onClick={() => onOpenOrder(order.id)}>
+                      <td><PriorityTag value={order.priority} /></td>
+                      <td><strong>{order.description}</strong><small>{state.customers.find((customer) => customer.id === order.customerId)?.name}</small></td>
+                      <td className="link-cell">{order.id}</td>
+                      <td><Status value={order.status} /></td>
+                      <td className={Date.parse(order.slaResolutionDue) <= Date.parse(state.now) ? "danger-text" : "warn-text"}>{shortDate(order.slaResolutionDue)} · {time(order.slaResolutionDue)}</td>
+                      <td><ChevronRight aria-hidden="true" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <DispatchTimeline state={state} />
+          <section className="panel performance-panel">
+            <div className="panel-heading">
+              <div><span className="heading-icon"><BarChart3 /></span><div><h2>Service performance</h2><p>First-time fix, trailing eight weeks</p></div></div>
+              <span className="metric-highlight">{metrics.firstTimeFixRate.toFixed(1)}%</span>
+            </div>
+            <div className="chart-area" role="img" aria-label="First-time fix rate rises from 78 to 86 percent over eight weeks">
+              <div className="y-labels"><span>100%</span><span>75%</span><span>50%</span><span>25%</span></div>
+              <svg viewBox="0 0 800 160" preserveAspectRatio="none" aria-hidden="true">
+                <defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#25d2f4" stopOpacity=".22"/><stop offset="1" stopColor="#25d2f4" stopOpacity="0"/></linearGradient></defs>
+                <path d="M0 116 L110 105 L220 91 L330 82 L440 79 L550 61 L660 68 L800 48 L800 160 L0 160 Z" fill="url(#area)"/>
+                <path d="M0 116 L110 105 L220 91 L330 82 L440 79 L550 61 L660 68 L800 48" fill="none" stroke="#25d2f4" strokeWidth="3"/>
+                {[0,110,220,330,440,550,660,800].map((x, index) => <circle key={x} cx={x} cy={[116,105,91,82,79,61,68,48][index]} r="5" fill="#071521" stroke="#25d2f4" strokeWidth="3"/>)}
+              </svg>
+              <div className="x-labels"><span>Aug 31</span><span>Sep 14</span><span>Sep 28</span><span>Oct 12</span><span>Oct 26</span></div>
+            </div>
+          </section>
+        </div>
+        <ActivityRail state={state} />
+      </div>
+    </>
+  );
+}
+
+function WorkOrderDetail({
+  state,
+  order,
+  proposalOpen,
+  onPreview,
+  onApprove,
+  onReserve,
+  onAdvance,
+}: {
+  state: OperationalState;
+  order: WorkOrder;
+  proposalOpen: boolean;
+  onPreview: () => void;
+  onApprove: (technicianId: string) => void;
+  onReserve: () => void;
+  onAdvance: () => void;
+}) {
+  const customer = state.customers.find((item) => item.id === order.customerId);
+  const location = state.locations.find((item) => item.id === order.locationId);
+  const asset = state.assets.find((item) => item.id === order.assetId);
+  const recommendations = recommendTechnicians(state, order.id).slice(0, 4);
+  const best = recommendations.find((item) => item.feasible);
+  const isReserved = order.requiredParts.length > 0 && order.requiredParts.every((requirement) => {
+    const item = state.inventory.find((candidate) => candidate.sku === requirement.sku);
+    return (item?.reservedBy[order.id] ?? 0) >= requirement.quantity;
+  });
+  const advance = nextStatus[order.status];
+  return (
+    <aside className="work-order-detail" aria-label={`Work order ${order.id} details`}>
+      <div className="detail-header">
+        <div><div className="detail-id-row"><h2>{order.id}</h2><PriorityTag value={order.priority} /></div><p>{label(order.status)} · created {shortDate(order.createdAt)} at {time(order.createdAt)}</p></div>
+        <Status value={order.status} />
+      </div>
+      <div className="detail-tabs" role="tablist"><button className="active-tab" role="tab" aria-selected="true">Details</button><button role="tab">Recommendation</button><button role="tab">Parts & finance</button><button role="tab">Audit</button></div>
+      <div className="detail-scroll">
+        <section className="detail-summary">
+          <div><small>Customer</small><strong>{customer?.name}</strong><span>{location?.name} · {location?.region}</span></div>
+          <div><small>Asset</small><strong>{asset?.category} · {asset?.model}</strong><span>{asset?.manufacturer} · {asset?.serialNumber}</span></div>
+          <div className="sla-box"><small>SLA resolution due</small><strong>{time(order.slaResolutionDue)}</strong><span>{shortDate(order.slaResolutionDue)} · response tracked separately</span></div>
+        </section>
+        <div className="requirements-grid">
+          <section><small>Required skills</small>{order.requiredSkills.map((skill) => <strong key={skill}><Check /> {skill}</strong>)}{order.requiredCertifications.map((cert) => <strong key={cert}><ShieldCheck /> {cert}</strong>)}</section>
+          <section><small>Required parts</small>{order.requiredParts.length ? order.requiredParts.map((part) => {
+            const item = state.inventory.find((candidate) => candidate.sku === part.sku);
+            return <div key={part.sku}><strong><PackageCheck /> {part.sku}</strong><span>{item?.description} · {availableQuantity(item!)} available</span><em>{(item?.reservedBy[order.id] ?? 0) ? "Reserved" : "Not reserved"}</em></div>;
+          }) : <span>No parts required</span>}</section>
+          <section><small>Appointment</small><strong><CalendarDays /> {shortDate(order.appointmentStart)}</strong><span>{time(order.appointmentStart)}–{time(order.appointmentEnd)}</span></section>
+        </div>
+        {order.status === "READY_TO_SCHEDULE" && (
+          <section className="recommendation-card">
+            <div className="section-title"><div><Sparkles /><div><h3>Assignment recommendation</h3><p>Feasible heuristic · hard constraints first</p></div></div><span>Explainable</span></div>
+            {best ? (
+              <div className="best-match">
+                <div className="match-top"><div><span className="avatar accent-avatar">{best.technicianName.split(" ").map((part) => part[0]).join("")}</span><div><strong>Recommend {best.technicianName} ({best.technicianId})</strong><small>{best.reasons.join(" · ")}</small></div></div><span className="best-label">Best feasible</span></div>
+                <div className="reason-grid"><span><ShieldCheck /> Qualification match</span><span><Clock3 /> Window available</span><span><Truck /> {best.travelMinutes} min estimated travel</span><span><PackageCheck /> Part ready</span></div>
+              </div>
+            ) : <EmptyState title="No feasible assignment" body="Review qualification, availability, appointment, and parts constraints." />}
+            <div className="alternatives">
+              {recommendations.filter((item) => item.technicianId !== best?.technicianId).slice(0, 3).map((item) => (
+                <div key={item.technicianId}><strong>{item.technicianName} ({item.technicianId})</strong><span>{item.feasible ? item.reasons.join(" · ") : item.blockers.join(" · ")}</span></div>
+              ))}
+            </div>
+            {proposalOpen && best && (
+              <div className="proposal-preview" data-testid="assignment-preview">
+                <div><strong>Review exact change</strong><p>Assign {best.technicianName} to {order.id} at {time(order.appointmentStart)}. This adds one schedule block; inventory is unchanged until you reserve parts.</p></div>
+                <button className="primary-button" data-testid="approve-assignment" onClick={() => onApprove(best.technicianId)}><Check /> Approve assignment</button>
+              </div>
+            )}
+            {!proposalOpen && best && <button className="primary-button full-button" data-testid="preview-assignment" onClick={onPreview}><ClipboardCheck /> Preview assignment</button>}
+          </section>
+        )}
+        {order.status !== "READY_TO_SCHEDULE" && order.status !== "CLOSED" && (
+          <section className="execution-card">
+            <div className="section-title"><div><Wrench /><div><h3>Service execution</h3><p>Assigned to {technicianName(state, order.assignedTechnicianId)}</p></div></div><Status value={order.status} /></div>
+            <div className="execution-actions">
+              {!isReserved && order.requiredParts.length > 0 && order.consumedParts.length === 0 && (
+                <button className="secondary-button" data-testid="reserve-parts" onClick={onReserve}><PackageCheck /> Reserve required part</button>
+              )}
+              {isReserved && <span className="success-note"><Check /> Parts reserved and dispatch-ready</span>}
+              {advance && (
+                <button className="primary-button" data-testid="advance-status" onClick={onAdvance}>
+                  {advance === "WORK_COMPLETED" ? "Complete & consume parts" : `Move to ${label(advance)}`} <ArrowRight />
+                </button>
+              )}
+            </div>
+          </section>
+        )}
+        {order.status === "CLOSED" && (
+          <section className="closed-receipt">
+            <Check /><div><h3>Service job closed</h3><p>Part usage, asset history, operational KPIs, audit history, and financial eligibility are updated.</p><strong>{formatCurrency(order.financials.recognizedRevenueCents)} recognized service revenue · invoice {label(order.financials.invoiceStatus)}</strong></div>
+          </section>
+        )}
+        <section className="lifecycle">
+          <h3>Work-order lifecycle</h3>
+          <div className="lifecycle-track">
+            {["REQUESTED", "TRIAGED", "APPROVED", "READY_TO_SCHEDULE", "SCHEDULED", "DISPATCHED", "IN_PROGRESS", "WORK_COMPLETED", "QUALITY_REVIEW", "CLOSED"].map((status) => {
+              const orderIndex = ["REQUESTED", "TRIAGED", "APPROVED", "READY_TO_SCHEDULE", "SCHEDULED", "DISPATCHED", "IN_PROGRESS", "WORK_COMPLETED", "QUALITY_REVIEW", "CLOSED"].indexOf(order.status);
+              const index = ["REQUESTED", "TRIAGED", "APPROVED", "READY_TO_SCHEDULE", "SCHEDULED", "DISPATCHED", "IN_PROGRESS", "WORK_COMPLETED", "QUALITY_REVIEW", "CLOSED"].indexOf(status);
+              return <div className={index <= orderIndex ? "complete-step" : ""} key={status}><span>{index < orderIndex ? <Check /> : index + 1}</span><small>{label(status)}</small></div>;
+            })}
+          </div>
+        </section>
+      </div>
+    </aside>
+  );
+}
+
+function WorkOrdersView({
+  state,
+  selectedId,
+  setSelectedId,
+  updateState,
+  notify,
+}: {
+  state: OperationalState;
+  selectedId: string;
+  setSelectedId: (id: string) => void;
+  updateState: (state: OperationalState) => void;
+  notify: (message: string, tone?: "success" | "error") => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [priority, setPriority] = useState("ALL");
+  const [proposalOpen, setProposalOpen] = useState(false);
+  const orders = state.workOrders
+    .filter((order) => {
+      const customer = state.customers.find((item) => item.id === order.customerId)?.name ?? "";
+      return `${order.id} ${order.description} ${customer}`.toLowerCase().includes(query.toLowerCase()) && (priority === "ALL" || order.priority === priority);
+    })
+    .sort((a, b) => Number(b.id === "WO-10483") - Number(a.id === "WO-10483") || Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  const selected = state.workOrders.find((order) => order.id === selectedId) ?? orders[0];
+  function apply(result: ReturnType<typeof assignWorkOrder>) {
+    if (result.ok) {
+      updateState(result.state);
+      notify(result.message);
+      setProposalOpen(false);
+    } else notify(result.error, "error");
+  }
+  return (
+    <div className="work-orders-screen">
+      <div className="work-orders-list">
+        <div className="page-title-row">
+          <div><h1>Work orders</h1><p>Manage validated service execution across every customer and site.</p></div>
+          <button className="primary-button"><FileText /> New work order</button>
+        </div>
+        <div className="filters-row">
+          <label className="search-field"><Search /><span className="sr-only">Search work orders</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search orders, customers, or assets" /></label>
+          <select aria-label="Filter by priority" value={priority} onChange={(event) => setPriority(event.target.value)}><option value="ALL">All priorities</option><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select>
+          <span className="result-count">{orders.length.toLocaleString()} records</span>
+        </div>
+        <div className="data-table-wrap work-order-table-wrap">
+          <table className="data-table work-order-table">
+            <thead><tr><th>Work order</th><th>Priority</th><th>Customer / site</th><th>Asset</th><th>Status</th><th>Due</th></tr></thead>
+            <tbody>
+              {orders.slice(0, 20).map((order) => {
+                const customer = state.customers.find((item) => item.id === order.customerId);
+                const location = state.locations.find((item) => item.id === order.locationId);
+                const asset = state.assets.find((item) => item.id === order.assetId);
+                return (
+                  <tr key={order.id} data-testid={order.id === "WO-10483" ? "selected-work-order" : undefined} className={selected?.id === order.id ? "selected-row" : ""} onClick={() => { setSelectedId(order.id); setProposalOpen(false); }}>
+                    <td><strong className="link-cell">{order.id}</strong><small>{order.description}</small></td>
+                    <td><PriorityTag value={order.priority} /></td>
+                    <td><strong>{customer?.name}</strong><small>{location?.name}</small></td>
+                    <td><strong>{asset?.category}</strong><small>{asset?.model}</small></td>
+                    <td><Status value={order.status} /></td>
+                    <td className={Date.parse(order.slaResolutionDue) < Date.parse(state.now) && order.status !== "CLOSED" ? "danger-text" : ""}>{shortDate(order.slaResolutionDue)}<small>{time(order.slaResolutionDue)}</small></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {selected && (
+        <WorkOrderDetail
+          state={state}
+          order={selected}
+          proposalOpen={proposalOpen}
+          onPreview={() => setProposalOpen(true)}
+          onApprove={(technicianId) => apply(assignWorkOrder(state, selected.id, technicianId))}
+          onReserve={() => apply(reserveRequiredParts(state, selected.id))}
+          onAdvance={() => {
+            const target = nextStatus[selected.status];
+            if (target) apply(transitionWorkOrder(state, selected.id, target));
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function DispatchView({ state, onOpenOrder }: { state: OperationalState; onOpenOrder: (id: string) => void }) {
+  const unscheduled = state.workOrders.filter((order) => order.status === "READY_TO_SCHEDULE").slice(0, 7);
+  return (
+    <>
+      <div className="page-title-row"><div><h1>Dispatch control tower</h1><p>Resource-constrained assignment with visible qualification and availability checks.</p></div><button className="primary-button"><Sparkles /> Run feasible heuristic</button></div>
+      <div className="dispatch-summary">
+        <section className="panel queue-panel">
+          <div className="panel-heading"><div><span className="heading-icon"><ClipboardCheck /></span><div><h2>Ready queue</h2><p>{unscheduled.length} highest-priority visible jobs</p></div></div></div>
+          <div className="queue-list">
+            {unscheduled.map((order) => {
+              const recommendation = recommendTechnicians(state, order.id).find((item) => item.feasible);
+              return <button key={order.id} onClick={() => onOpenOrder(order.id)}><PriorityTag value={order.priority}/><div><strong>{order.id} · {order.description}</strong><span>{recommendation ? `${recommendation.technicianName} recommended · ${recommendation.travelMinutes} min travel` : "No feasible assignment"}</span></div><ChevronRight /></button>;
+            })}
+          </div>
+        </section>
+        <section className="panel constraint-panel">
+          <div className="panel-heading"><div><span className="heading-icon"><ShieldCheck /></span><div><h2>Constraint policy</h2><p>Rules applied before efficiency scoring</p></div></div></div>
+          <ul className="constraint-list"><li><Check /> Required skill and certification match</li><li><Check /> Shift and appointment window containment</li><li><Check /> No overlapping assignments</li><li><Check /> Technician availability</li><li><Check /> Required parts available</li></ul>
+          <p className="policy-note">Feasible candidates are ranked by deterministic travel estimate and current workload. The heuristic makes no global-optimality claim and never changes the schedule without approval.</p>
+        </section>
+      </div>
+      <DispatchTimeline state={state} />
+    </>
+  );
+}
+
+function InventoryView({ state }: { state: OperationalState }) {
+  const items = state.inventory.slice().sort((a, b) => availableQuantity(a) - availableQuantity(b)).slice(0, 30);
+  return (
+    <>
+      <div className="page-title-row"><div><h1>Inventory & parts</h1><p>On-hand, reservation, availability, reorder exposure, and service usage.</p></div><span className="definition-chip">Available = on-hand − reserved</span></div>
+      <section className="panel inventory-panel">
+        <div className="data-table-wrap"><table className="data-table"><thead><tr><th>SKU</th><th>Description</th><th>Warehouse</th><th>On hand</th><th>Reserved</th><th>Available</th><th>Reorder point</th><th>Status</th></tr></thead><tbody>
+          {items.map((item) => {
+            const reserved = Object.values(item.reservedBy).reduce((sum, quantity) => sum + quantity, 0);
+            const available = availableQuantity(item);
+            return <tr key={item.sku} className={item.sku === "CR-440" ? "selected-row" : ""}><td className="link-cell">{item.sku}</td><td><strong>{item.description}</strong><small>{item.category}</small></td><td>{item.warehouse}</td><td>{item.onHand}</td><td>{reserved}</td><td><strong>{available}</strong></td><td>{item.reorderPoint}</td><td><Status value={available === 0 ? "SHORTAGE" : available <= item.reorderPoint ? "REORDER_REVIEW" : "HEALTHY"} /></td></tr>;
+          })}
+        </tbody></table></div>
+      </section>
+    </>
+  );
+}
+
+function ScenarioLabView({ session, setSession, notify }: { session: DemoSession; setSession: (session: DemoSession) => void; notify: (message: string) => void }) {
+  const active = session.scenario;
+  const before = calculateMetrics(active?.baseline ?? session.canonical);
+  const after = calculateMetrics(active?.simulated ?? session.canonical);
+  function run(id: ScenarioId) {
+    const scenario = createScenario(session.canonical, id);
+    setSession({ ...session, scenario });
+    notify(`${scenario.title} applied to isolated scenario state.`);
+  }
+  return (
+    <>
+      <div className="page-title-row"><div><h1>Scenario Lab</h1><p>Reproducible disruptions applied to an isolated copy of current canonical demo state.</p></div><span className="synthetic-label"><FlaskConical /> Synthetic simulation</span></div>
+      <div className="scenario-layout">
+        <section className="scenario-catalog" aria-label="Available scenarios">
+          {scenarioCatalog.map((scenario, index) => (
+            <button key={scenario.id} className={active?.id === scenario.id ? "active-scenario" : ""} data-testid={scenario.id === "technician-callout" ? "scenario-technician-callout" : undefined} onClick={() => run(scenario.id)}>
+              <span>0{index + 1}</span><div><strong>{scenario.title}</strong><p>{scenario.summary}</p></div><ChevronRight />
+            </button>
+          ))}
+        </section>
+        <section className="scenario-stage">
+          {active ? (
+            <>
+              <div className="scenario-stage-header"><div><small>Active isolated scenario</small><h2>{active.title}</h2><p>{active.assumption}</p></div><button className="secondary-button" data-testid="reset-scenario" onClick={() => { setSession({ ...session, scenario: null }); notify("Scenario reset; canonical demo state preserved."); }}><RefreshCw /> Reset scenario</button></div>
+              <div className="comparison-grid">
+                <div><small>Open work orders</small><span>{before.openWorkOrders}</span><ArrowRight/><strong>{after.openWorkOrders}</strong><em>{after.openWorkOrders - before.openWorkOrders >= 0 ? "+" : ""}{after.openWorkOrders - before.openWorkOrders}</em></div>
+                <div><small>SLA risk</small><span>{before.slaRisk}</span><ArrowRight/><strong>{after.slaRisk}</strong><em>{after.slaRisk - before.slaRisk >= 0 ? "+" : ""}{after.slaRisk - before.slaRisk}</em></div>
+                <div><small>Available technicians</small><span>{before.techniciansAvailable}</span><ArrowRight/><strong>{after.techniciansAvailable}</strong><em>{after.techniciansAvailable - before.techniciansAvailable}</em></div>
+                <div><small>Impacted records</small><span>0</span><ArrowRight/><strong>{active.impactedWorkOrderIds.length}</strong><em>isolated</em></div>
+              </div>
+              <div className="explanation-box"><AlertTriangle/><div><strong>Why the metrics changed</strong><p>{active.id === "technician-callout" ? "Removing a scheduled technician returns their jobs to the ready queue and reduces available field capacity. No canonical assignment was changed." : `${active.impactedWorkOrderIds.length} records or resources changed under the declared assumption. Every result is computed from scenario state, not random display values.`}</p></div></div>
+              {active.impactedWorkOrderIds.length > 0 && <div className="impacted-list"><strong>Impacted identifiers</strong><p>{active.impactedWorkOrderIds.slice(0, 12).join(" · ")}{active.impactedWorkOrderIds.length > 12 ? ` · +${active.impactedWorkOrderIds.length - 12} more` : ""}</p></div>}
+            </>
+          ) : <EmptyState title="Select a disruption" body="Each scenario starts from current canonical state, computes before-and-after metrics, and can be fully reversed." />}
+        </section>
+      </div>
+    </>
+  );
+}
+
+function AnalyticsView({ state }: { state: OperationalState }) {
+  const metrics = calculateMetrics(state);
+  return (
+    <>
+      <div className="page-title-row"><div><h1>Operational analytics</h1><p>Documented calculations tied to shared work-order, workforce, inventory, and financial records.</p></div><span className="definition-chip">As of Mon, Oct 26 · 9:00 AM ET</span></div>
+      <div className="analytics-grid">
+        <section className="panel analytics-hero"><small>Recognized service revenue</small><strong>{formatCurrency(metrics.recognizedRevenueCents)}</strong><p>Separate from invoicing and cash collection. Taxes are not modeled.</p><div><span>Gross margin <b>{metrics.grossMarginRate.toFixed(1)}%</b></span><span>Scheduled utilization <b>{metrics.scheduledUtilization.toFixed(1)}%</b></span><span>MTTR <b>{Math.round(metrics.meanTimeToRepairMinutes / 60)} hrs</b></span></div></section>
+        <section className="panel formula-panel"><h2>Calculation registry</h2><dl><dt>First-time fix rate</dt><dd>{metricDefinitions.firstTimeFixRate}</dd><dt>Technician utilization</dt><dd>{metricDefinitions.scheduledUtilization}</dd><dt>Mean time to repair</dt><dd>{metricDefinitions.meanTimeToRepair}</dd><dt>SLA risk</dt><dd>{metricDefinitions.slaRisk}</dd><dt>Gross margin</dt><dd>{metricDefinitions.grossMargin}</dd></dl></section>
+      </div>
+      <DispatchTimeline state={state}/>
+    </>
+  );
+}
+
+function ActivityView({ state }: { state: OperationalState }) {
+  return <><div className="page-title-row"><div><h1>Activity & audit</h1><p>Append-only receipts for every state-changing demo command.</p></div><span className="definition-chip">{state.audit.length.toLocaleString()} events</span></div><ActivityRail state={state} limit={30}/></>;
+}
+
+function PortfolioView({ onLaunch }: { onLaunch: () => void }) {
+  return (
+    <div className="portfolio-view">
+      <section className="portfolio-copy"><span className="portfolio-mark"><Command/> ServiceOPS</span><h1>Field service intelligence, dispatch, and operational control.</h1><p>A browser-based operations command platform demonstrating validated work-order lifecycles, explainable scheduling, parts integrity, service economics, deterministic automation, and reversible disruption modeling.</p><div className="portfolio-actions"><button className="primary-button" onClick={onLaunch}>Open live demo <ArrowRight/></button><a className="secondary-button" href="https://github.com/Cabberefwenf/ServiceOPS" target="_blank" rel="noreferrer">Private repository</a></div><small>All displayed companies, people, sites, assets, work orders, and financials are synthetic.</small></section>
+      <section className="portfolio-proof"><div><small>Architecture</small><strong>Local-first, versioned state</strong><p>No account, database, provider, or paid API is required.</p></div><div><small>Operational integrity</small><strong>Atomic domain commands</strong><p>Transitions, schedules, reservations, costs, and audit events move together.</p></div><div><small>Human authority</small><strong>Preview before execution</strong><p>Recommendations explain constraints and require explicit approval.</p></div><div><small>Technology</small><strong>Next.js · React · TypeScript</strong><p>Zod boundaries, Vitest domain checks, and Playwright browser verification.</p></div></section>
+    </div>
+  );
+}
+
+export function ServiceOpsApp() {
+  const [session, setSession] = useState<DemoSession>(() => createSeedSession());
+  const [hydrated, setHydrated] = useState(false);
+  const [view, setView] = useState<View>("Overview");
+  const [selectedId, setSelectedId] = useState("WO-10483");
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
+  const state = session.scenario?.simulated ?? session.canonical;
+  const metrics = useMemo(() => calculateMetrics(state), [state]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setSession(loadSession());
+      setHydrated(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  useEffect(() => {
+    if (hydrated) saveSession(session);
+  }, [hydrated, session]);
+  useEffect(() => {
+    if (!toast) return;
+    const timeout = window.setTimeout(() => setToast(null), 4200);
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
+
+  function notify(message: string, tone: "success" | "error" = "success") {
+    setToast({ message, tone });
+  }
+  function updateState(next: OperationalState) {
+    if (session.scenario) setSession({ ...session, scenario: { ...session.scenario, simulated: next } });
+    else setSession({ ...session, canonical: next });
+  }
+  function navigate(next: View) {
+    setView(next);
+    setMobileOpen(false);
+  }
+  function openOrder(id: string) {
+    setSelectedId(id);
+    navigate("Work Orders");
+  }
+  function resetDemo() {
+    setSession(createSeedSession());
+    setSelectedId("WO-10483");
+    setView("Overview");
+    notify("Canonical synthetic demo restored to its verified baseline.");
+  }
+
+  return (
+    <div className="app-shell">
+      <a href="#main-content" className="skip-link">Skip to main content</a>
+      <header className="topbar">
+        <button className="mobile-menu-button" aria-label="Open navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)}><Menu/></button>
+        <button className="brand" onClick={() => navigate("Overview")}><span>Service</span><b>OPS</b></button>
+        <span className="synthetic-label"><FlaskConical/> Synthetic demo</span>
+        <label className="global-search"><Search/><span className="sr-only">Search</span><input placeholder="Search work orders, customers, assets, or technicians…" /></label>
+        <button className="header-filter"><CalendarDays/> Mon, Oct 26</button>
+        <button className="header-filter">All regions</button>
+        <span className="header-health"><span/> {metrics.slaRisk} SLA risks</span>
+        <button className="reset-button" data-testid="reset-demo" onClick={resetDemo}><RefreshCw/> Reset demo</button>
+        <span className="user-avatar">JD</span>
+      </header>
+      <aside className={`sidebar ${mobileOpen ? "mobile-open" : ""}`}>
+        <div className="mobile-sidebar-head"><span>Navigation</span><button aria-label="Close navigation" onClick={() => setMobileOpen(false)}><X/></button></div>
+        <nav aria-label="Primary navigation">
+          {navItems.map(({ label: item, icon: Icon }) => <button key={item} data-testid={`nav-${item.toLowerCase().replaceAll(" ", "-")}`} className={view === item ? "nav-active" : ""} onClick={() => navigate(item)}><Icon/><span>{item}</span></button>)}
+        </nav>
+        <div className="sidebar-footer"><strong>Northstar</strong><span>Industrial Service Group</span><p>Field service for a more reliable tomorrow.</p><small>Synthetic records only.<br/>No real customers or people.</small></div>
+      </aside>
+      {mobileOpen && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
+      <main id="main-content" className={`main-content view-${view.toLowerCase().replaceAll(" ", "-")}`}>
+        {session.scenario && view !== "Scenario Lab" && <div className="scenario-banner"><FlaskConical/><span>Viewing isolated scenario: <strong>{session.scenario.title}</strong></span><button onClick={() => navigate("Scenario Lab")}>Inspect comparison</button></div>}
+        {view === "Overview" && <OverviewView state={state} onOpenOrder={openOrder}/>} 
+        {view === "Work Orders" && <WorkOrdersView state={state} selectedId={selectedId} setSelectedId={setSelectedId} updateState={updateState} notify={notify}/>} 
+        {view === "Dispatch" && <DispatchView state={state} onOpenOrder={openOrder}/>} 
+        {view === "Inventory" && <InventoryView state={state}/>} 
+        {view === "Scenario Lab" && <ScenarioLabView session={session} setSession={setSession} notify={notify}/>} 
+        {view === "Analytics" && <AnalyticsView state={state}/>} 
+        {view === "Activity" && <ActivityView state={state}/>} 
+        {view === "Portfolio" && <PortfolioView onLaunch={() => navigate("Overview")}/>} 
+      </main>
+      {toast && <div className={`toast toast-${toast.tone}`} role="status"><span>{toast.tone === "success" ? <Check/> : <AlertTriangle/>}</span>{toast.message}<button aria-label="Dismiss notification" onClick={() => setToast(null)}><X/></button></div>}
+    </div>
+  );
+}
