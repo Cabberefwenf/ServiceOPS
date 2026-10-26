@@ -19,3 +19,9 @@
 - Strict Zod schemas for every persisted entity (unknown keys rejected, integer cents enforced), schema v2 with v1→v2 migration, 5 MB size limit, post-parse referential integrity check, compact scenario baseline storage, and a visible notice when saved state is rejected or migrated.
 - Seed: 80 open work orders (was 18), fictional human technician/contact names, 120 unique customer names, 3 business calendars, 120 service agreements, 920 reconciled historical invoices.
 - Header search now filters work orders; decorative header buttons and the unwired dispatch button removed.
+
+### Planning, SLA calendars, finance, automation domain (PR #3)
+- `sla.ts`: business-hours calendars (working days, hours, holidays, IANA zone), `addBusinessMinutes`, `businessMinutesBetween`, contract SLA from the governing agreement.
+- `planning.ts`: deterministic scheduler over the ready queue with a naive first-available baseline for comparison; recovery proposals for all six scenarios (parts shortage records a purchase request, never invents stock).
+- `finance.ts`: invoice generation and payment recording in integer cents; invoiced, cash received, outstanding, and overdue kept separate.
+- `automation.ts`: three deterministic rules with PROPOSE → PREVIEW → APPROVE → EXECUTE → RECEIPT, idempotent by proposal key, stale-trigger check, and declines recorded.
