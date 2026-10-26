@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type {
   InventoryItem,
   OperationalState,
@@ -86,7 +87,7 @@ export function recommendTechnicians(
   const end = start + order.estimatedDurationMinutes * 60_000;
   const partsReady = order.requiredParts.every((requirement) => {
     const item = state.inventory.find((candidate) => candidate.sku === requirement.sku);
-    return item && availableQuantity(item) >= requirement.quantity;
+    return item && availableQuantity(item) + (item.reservedBy[order.id] ?? 0) >= requirement.quantity;
   });
 
   return state.technicians
@@ -222,10 +223,29 @@ function releaseReservations(state: OperationalState, workOrderId: string) {
   for (const item of state.inventory) delete item.reservedBy[workOrderId];
 }
 
+export const RESOLUTION_CODES = ["REPAIRED", "REPLACED_COMPONENT", "ADJUSTED", "TEMPORARY_FIX"] as const;
+
+export const completionSchema = z.object({
+  actualLaborMinutes: z
+    .number({ error: "Actual labor minutes must be a number." })
+    .int("Actual labor minutes must be a whole number.")
+    .min(1, "Actual labor must be at least 1 minute.")
+    .max(16 * 60, "Actual labor cannot exceed 16 hours for one visit."),
+  completionNotes: z
+    .string()
+    .trim()
+    .min(10, "Completion notes must describe the work (10+ characters).")
+    .max(1000, "Completion notes are limited to 1,000 characters."),
+  resolutionCode: z.enum(RESOLUTION_CODES),
+});
+
+export type CompletionInput = z.infer<typeof completionSchema>;
+
 export function transitionWorkOrder(
   state: OperationalState,
   workOrderId: string,
   to: WorkOrderStatus,
+  completion?: CompletionInput,
 ): OperationResult {
   const source = findOrder(state, workOrderId);
   if (!source) return { ok: false, error: "Work order was not found." };
@@ -236,10 +256,22 @@ export function transitionWorkOrder(
   if (to === "DISPATCHED" && !hasRequiredReservations(state, source))
     return { ok: false, error: "Dispatch blocked: reserve every required part first." };
 
+  let validCompletion: CompletionInput | undefined;
+  if (to === "WORK_COMPLETED") {
+    const parsed = completionSchema.safeParse(completion);
+    if (!parsed.success)
+      return {
+        ok: false,
+        error: `Completion record required: ${parsed.error.issues.map((issue) => issue.message).join(" ")}`,
+      };
+    validCompletion = parsed.data;
+  }
+
   const next = clone(state);
   const order = findOrder(next, workOrderId);
   if (!order) return { ok: false, error: "Work order was not found after validation." };
   order.status = to;
+  if (to === "IN_PROGRESS" && !order.firstRespondedAt) order.firstRespondedAt = next.now;
   if (to === "WORK_COMPLETED") {
     try {
       consumeReservations(next, order);
@@ -247,11 +279,13 @@ export function transitionWorkOrder(
       return { ok: false, error: error instanceof Error ? error.message : "Parts could not be consumed." };
     }
     const technician = next.technicians.find((item) => item.id === order.assignedTechnicianId);
-    order.actualLaborMinutes = order.estimatedDurationMinutes + 12;
+    const record = validCompletion as CompletionInput;
+    order.actualLaborMinutes = record.actualLaborMinutes;
     order.completedAt = next.now;
     order.visits += 1;
-    order.resolutionCode = "REPAIRED";
-    order.completionNotes = "Relay replaced, controls verified, and chiller returned to service.";
+    order.resolutionCode = record.resolutionCode;
+    order.completionNotes = record.completionNotes;
+    if (record.resolutionCode === "TEMPORARY_FIX") order.reopened = true;
     if (technician) {
       order.financials.laborCostCents = Math.round(
         (order.actualLaborMinutes / 60) * technician.laborCostRateCents,
@@ -270,6 +304,11 @@ export function transitionWorkOrder(
     order.financials.invoiceStatus = "ELIGIBLE";
   }
   if (to === "CANCELLED") releaseReservations(next, order.id);
+  if (to === "CANCELLED" && order.assignedTechnicianId) {
+    const technician = next.technicians.find((item) => item.id === order.assignedTechnicianId);
+    if (technician)
+      technician.assignments = technician.assignments.filter((assignment) => assignment.workOrderId !== order.id);
+  }
   appendAudit(next, order.id, "STATUS_CHANGED", `${statusLabel(source.status)} → ${statusLabel(to)}.`);
   return { ok: true, state: next, message: `Work order moved to ${to.replaceAll("_", " ")}.` };
 }
@@ -344,7 +383,11 @@ function addScenarioOrders(
   });
 }
 
-export function createScenario(state: OperationalState, id: ScenarioId): ScenarioState {
+export function createScenario(
+  state: OperationalState,
+  id: ScenarioId,
+  options: { technicianId?: string } = {},
+): ScenarioState {
   const baseline = clone(state);
   const simulated = clone(state);
   const definition = scenarioCatalog.find((item) => item.id === id) ?? scenarioCatalog[0];
@@ -353,7 +396,7 @@ export function createScenario(state: OperationalState, id: ScenarioId): Scenari
   let affectedTechnicianId: string | undefined;
 
   if (id === "technician-callout") {
-  const technician = simulated.technicians.find((item) => item.id === "T-104") ?? simulated.technicians[0];
+  const technician = simulated.technicians.find((item) => item.id === (options.technicianId ?? "T-104")) ?? simulated.technicians[0];
     impacted = technician?.assignments.map((assignment) => assignment.workOrderId) ?? [];
     affectedTechnicianId = technician?.id;
   if (technician) {
@@ -423,4 +466,129 @@ export function technicianName(state: OperationalState, id?: string) {
 
 export function isTechnicianAvailable(technician: Technician) {
   return technician.status === "AVAILABLE" || technician.status === "ON_JOB";
+}
+
+const priorityRank: Record<WorkOrder["priority"], number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+
+export interface ReassignmentProposal {
+  workOrderId: string;
+  priority: WorkOrder["priority"];
+  feasible: boolean;
+  technicianId?: string;
+  technicianName?: string;
+  travelMinutes?: number;
+  explanation: string;
+}
+
+export interface ReassignmentPlan {
+  proposals: ReassignmentProposal[];
+  /** Scenario state with every feasible proposal applied. Only used after explicit user acceptance. */
+  resultingState: OperationalState;
+}
+
+/**
+ * Greedy, deterministic recovery heuristic: impacted jobs are processed by priority, then SLA
+ * resolution deadline, then id. Each job receives the best-scoring feasible technician given the
+ * assignments already proposed earlier in the run. This is a feasible heuristic, not a proven optimum.
+ */
+export function proposeReassignments(state: OperationalState, workOrderIds: string[]): ReassignmentPlan {
+  let working = clone(state);
+  const orders = workOrderIds
+    .map((id) => findOrder(state, id))
+    .filter((order): order is WorkOrder => Boolean(order))
+    .sort(
+      (a, b) =>
+        priorityRank[a.priority] - priorityRank[b.priority] ||
+        Date.parse(a.slaResolutionDue) - Date.parse(b.slaResolutionDue) ||
+        a.id.localeCompare(b.id),
+    );
+  const proposals: ReassignmentProposal[] = [];
+  for (const order of orders) {
+    if (order.status !== "READY_TO_SCHEDULE") {
+      proposals.push({
+        workOrderId: order.id,
+        priority: order.priority,
+        feasible: false,
+        explanation: `Status is ${statusLabel(order.status)}; a dispatcher must review this job before it can be reassigned.`,
+      });
+      continue;
+    }
+    const best = recommendTechnicians(working, order.id).find((candidate) => candidate.feasible);
+    if (!best) {
+      const top = recommendTechnicians(working, order.id)[0];
+      proposals.push({
+        workOrderId: order.id,
+        priority: order.priority,
+        feasible: false,
+        explanation: `No feasible technician. Closest candidate blocked by: ${top?.blockers.join("; ") ?? "no technicians"}.`,
+      });
+      continue;
+    }
+    const result = assignWorkOrder(working, order.id, best.technicianId);
+    if (!result.ok) {
+      proposals.push({ workOrderId: order.id, priority: order.priority, feasible: false, explanation: result.error });
+      continue;
+    }
+    working = result.state;
+    proposals.push({
+      workOrderId: order.id,
+      priority: order.priority,
+      feasible: true,
+      technicianId: best.technicianId,
+      technicianName: best.technicianName,
+      travelMinutes: best.travelMinutes,
+      explanation: `${best.technicianName} (${best.technicianId}): ${best.reasons.join(", ").toLowerCase()}; ${best.travelMinutes} min estimated travel.`,
+    });
+  }
+  return { proposals, resultingState: working };
+}
+
+export interface IntegrityIssue {
+  entity: string;
+  id: string;
+  problem: string;
+}
+
+/** Checks referential integrity and inventory invariants across the whole state. */
+export function checkIntegrity(state: OperationalState): IntegrityIssue[] {
+  const issues: IntegrityIssue[] = [];
+  const customers = new Set(state.customers.map((item) => item.id));
+  const locations = new Map(state.locations.map((item) => [item.id, item]));
+  const assets = new Set(state.assets.map((item) => item.id));
+  const orders = new Map(state.workOrders.map((item) => [item.id, item]));
+  const technicians = new Set(state.technicians.map((item) => item.id));
+  for (const location of state.locations)
+    if (!customers.has(location.customerId)) issues.push({ entity: "location", id: location.id, problem: "orphan customer" });
+  for (const asset of state.assets) {
+    const location = locations.get(asset.locationId);
+    if (!location) issues.push({ entity: "asset", id: asset.id, problem: "orphan location" });
+    else if (location.customerId !== asset.customerId)
+      issues.push({ entity: "asset", id: asset.id, problem: "location belongs to another customer" });
+  }
+  for (const order of state.workOrders) {
+    if (!customers.has(order.customerId)) issues.push({ entity: "workOrder", id: order.id, problem: "orphan customer" });
+    if (!locations.has(order.locationId)) issues.push({ entity: "workOrder", id: order.id, problem: "orphan location" });
+    if (!assets.has(order.assetId)) issues.push({ entity: "workOrder", id: order.id, problem: "orphan asset" });
+    if (order.assignedTechnicianId && !technicians.has(order.assignedTechnicianId))
+      issues.push({ entity: "workOrder", id: order.id, problem: "orphan technician" });
+  }
+  for (const technician of state.technicians) {
+    const blocks = [...technician.assignments].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+    blocks.forEach((assignment, index) => {
+      if (!orders.has(assignment.workOrderId))
+        issues.push({ entity: "technician", id: technician.id, problem: `assignment to missing ${assignment.workOrderId}` });
+      const previous = blocks[index - 1];
+      if (previous && Date.parse(previous.end) > Date.parse(assignment.start))
+        issues.push({ entity: "technician", id: technician.id, problem: `overlapping assignments ${previous.workOrderId}/${assignment.workOrderId}` });
+    });
+  }
+  for (const item of state.inventory) {
+    if (item.onHand < 0) issues.push({ entity: "inventory", id: item.sku, problem: "negative on-hand" });
+    if (availableQuantity(item) < 0) issues.push({ entity: "inventory", id: item.sku, problem: "reserved exceeds on-hand" });
+    for (const [orderId, quantity] of Object.entries(item.reservedBy)) {
+      if (!orders.has(orderId)) issues.push({ entity: "inventory", id: item.sku, problem: `reservation for missing ${orderId}` });
+      if (quantity <= 0) issues.push({ entity: "inventory", id: item.sku, problem: `non-positive reservation ${orderId}` });
+    }
+  }
+  return issues;
 }
