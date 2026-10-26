@@ -242,7 +242,7 @@ function OverviewView({
               <div><span className="heading-icon danger"><AlertTriangle /></span><div><h2>Attention queue</h2><p>Highest-impact operational exceptions</p></div></div>
               <button className="text-button" onClick={() => onDrill("OPEN")}>View open work orders <ArrowRight /></button>
             </div>
-            <div className="data-table-wrap">
+            <div className="data-table-wrap" tabIndex={0} role="region" aria-label="Scrollable table">
               <table className="data-table">
                 <thead><tr><th>Priority</th><th>Issue</th><th>Work order</th><th>Status</th><th>Resolution due</th><th><span className="sr-only">Open</span></th></tr></thead>
                 <tbody>
@@ -486,7 +486,7 @@ function WorkOrdersView({
           <span className="result-count">{orders.length.toLocaleString()} records</span>
         </div>
         {creating && <NewWorkOrderForm state={state} onCancel={() => setCreating(false)} onSubmit={(input) => { const result = createWorkOrder(state, input); apply(result); if (result.ok) { setCreating(false); setFilter("ALL"); setQuery(""); setSelectedId(result.state.workOrders[0]?.id ?? ""); } }} />}
-        <div className="data-table-wrap work-order-table-wrap">
+        <div className="data-table-wrap work-order-table-wrap" tabIndex={0} role="region" aria-label="Work orders table">
           <table className="data-table work-order-table">
             <thead><tr><th>Work order</th><th>Priority</th><th>Customer / site</th><th>Asset</th><th>Status</th><th>Due</th></tr></thead>
             <tbody>
@@ -650,6 +650,11 @@ const tourSteps: Array<{ view: View; title: string; body: string }> = [
 
 function GuidedTour({ step, onStep, onClose }: { step: number; onStep: (index: number) => void; onClose: () => void }) {
   const current = tourSteps[step];
+  useEffect(() => {
+    const trigger = document.activeElement as HTMLElement | null;
+    document.querySelector<HTMLButtonElement>('[data-testid="tour-next"], [data-testid="tour-finish"]')?.focus();
+    return () => { (trigger?.isConnected ? trigger : document.querySelector<HTMLElement>('[data-testid="start-tour"]'))?.focus(); };
+  }, []);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
