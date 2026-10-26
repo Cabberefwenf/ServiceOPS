@@ -4,6 +4,10 @@ ServiceOPS is a local-first field-service intelligence, dispatch, and operationa
 
 > All people, companies, sites, assets, jobs, and financial records in the application are synthetic.
 
+## Live demo
+
+[Open ServiceOPS](https://serviceops-phi.vercel.app/) — public synthetic demonstration; no account or backend configuration required.
+
 ## Local development
 
 ```bash
