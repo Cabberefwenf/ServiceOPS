@@ -146,8 +146,60 @@ export interface AuditEvent {
   detail: string;
 }
 
+export interface BusinessCalendar {
+  id: string;
+  name: string;
+  /** IANA zone used to interpret business hours. */
+  timeZone: string;
+  /** 0 = Sunday … 6 = Saturday. */
+  workingDays: number[];
+  /** Minutes after local midnight. 0 and 1440 for a 24-hour calendar. */
+  openMinute: number;
+  closeMinute: number;
+  /** Local dates (YYYY-MM-DD) treated as non-working. */
+  holidays: string[];
+}
+
+export interface ServiceAgreement {
+  id: string;
+  customerId: string;
+  name: string;
+  tier: "PLATINUM" | "GOLD" | "STANDARD";
+  coverageStart: string;
+  coverageEnd: string;
+  calendarId: string;
+  coveredLocationIds: string[];
+  contractedServiceTypes: string[];
+  /** Business minutes to first response and resolution, by priority. */
+  responseMinutes: Record<Priority, number>;
+  resolutionMinutes: Record<Priority, number>;
+  exclusions: string[];
+  escalationContacts: string[];
+}
+
+export interface Invoice {
+  id: string;
+  workOrderId: string;
+  customerId: string;
+  issuedAt: string;
+  dueAt: string;
+  lines: { description: string; amountCents: number }[];
+  totalCents: number;
+  paidCents: number;
+  status: "ISSUED" | "PARTIALLY_PAID" | "PAID";
+}
+
+export interface AutomationReceipt {
+  id: string;
+  ruleId: string;
+  proposalKey: string;
+  decision: "EXECUTED" | "DECLINED";
+  timestamp: string;
+  summary: string;
+}
+
 export interface OperationalState {
-  schemaVersion: 1;
+  schemaVersion: 2;
   organizationName: string;
   now: string;
   customers: Customer[];
@@ -156,6 +208,10 @@ export interface OperationalState {
   technicians: Technician[];
   workOrders: WorkOrder[];
   inventory: InventoryItem[];
+  calendars: BusinessCalendar[];
+  agreements: ServiceAgreement[];
+  invoices: Invoice[];
+  automationReceipts: AutomationReceipt[];
   audit: AuditEvent[];
 }
 
@@ -177,7 +233,7 @@ export interface ScenarioState {
 }
 
 export interface DemoSession {
-  schemaVersion: 1;
+  schemaVersion: 2;
   canonical: OperationalState;
   scenario: ScenarioState | null;
 }

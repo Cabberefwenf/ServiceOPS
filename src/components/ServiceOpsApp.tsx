@@ -47,7 +47,7 @@ import {
 } from "@/domain/operations";
 import { calculateMetrics, formatCurrency, metricDefinitions } from "@/domain/metrics";
 import { createSeedSession } from "@/domain/seed";
-import { loadSession, saveSession } from "@/domain/session";
+import { loadSessionWithOutcome, saveSession } from "@/domain/session";
 import type {
   DemoSession,
   OperationalState,
@@ -403,14 +403,16 @@ function WorkOrdersView({
   setSelectedId,
   updateState,
   notify,
+  initialQuery = "",
 }: {
+  initialQuery?: string;
   state: OperationalState;
   selectedId: string;
   setSelectedId: (id: string) => void;
   updateState: (state: OperationalState) => void;
   notify: (message: string, tone?: "success" | "error") => void;
 }) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [priority, setPriority] = useState("ALL");
   const [proposalOpen, setProposalOpen] = useState(false);
   const orders = state.workOrders
@@ -485,7 +487,7 @@ function DispatchView({ state, onOpenOrder }: { state: OperationalState; onOpenO
   const unscheduled = state.workOrders.filter((order) => order.status === "READY_TO_SCHEDULE").slice(0, 7);
   return (
     <>
-      <div className="page-title-row"><div><h1>Dispatch control tower</h1><p>Resource-constrained assignment with visible qualification and availability checks.</p></div><button className="primary-button"><Sparkles /> Run feasible heuristic</button></div>
+      <div className="page-title-row"><div><h1>Dispatch control tower</h1><p>Resource-constrained assignment with visible qualification and availability checks.</p></div></div>
       <div className="dispatch-summary">
         <section className="panel queue-panel">
           <div className="panel-heading"><div><span className="heading-icon"><ClipboardCheck /></span><div><h2>Ready queue</h2><p>{unscheduled.length} highest-priority visible jobs</p></div></div></div>
@@ -613,14 +615,18 @@ export function ServiceOpsApp() {
   const [view, setView] = useState<View>("Overview");
   const [selectedId, setSelectedId] = useState("WO-10483");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [globalQuery, setGlobalQuery] = useState("");
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
   const state = session.scenario?.simulated ?? session.canonical;
   const metrics = useMemo(() => calculateMetrics(state), [state]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      setSession(loadSession());
+      const { session: loaded, outcome } = loadSessionWithOutcome();
+      setSession(loaded);
       setHydrated(true);
+      if (outcome.kind === "rejected") setToast({ message: `Saved demo state was rejected (${outcome.reason}); the verified baseline was loaded instead.`, tone: "error" });
+      else if (outcome.kind === "restored" && outcome.migratedFrom) setToast({ message: `Saved demo state migrated from schema v${outcome.migratedFrom} to v2.`, tone: "success" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, []);
@@ -662,9 +668,8 @@ export function ServiceOpsApp() {
         <button className="mobile-menu-button" aria-label="Open navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)}><Menu/></button>
         <button className="brand" onClick={() => navigate("Overview")}><span>Service</span><b>OPS</b></button>
         <span className="synthetic-label"><FlaskConical/> Synthetic demo</span>
-        <label className="global-search"><Search/><span className="sr-only">Search</span><input placeholder="Search work orders, customers, assets, or technicians…" /></label>
-        <button className="header-filter"><CalendarDays/> Mon, Oct 26</button>
-        <button className="header-filter">All regions</button>
+        <form className="global-search" role="search" onSubmit={(event) => { event.preventDefault(); const value = new FormData(event.currentTarget).get("q"); setGlobalQuery(String(value ?? "")); navigate("Work Orders"); }}><Search aria-hidden="true"/><label htmlFor="global-search-input" className="sr-only">Search work orders</label><input id="global-search-input" name="q" data-testid="global-search" placeholder="Search work orders by ID, description, or customer…" /></form>
+        <span className="header-filter" title="Synthetic demo clock"><CalendarDays aria-hidden="true"/> Mon, Oct 26 · 9:00 AM ET</span>
         <span className="header-health"><span/> {metrics.slaRisk} SLA risks</span>
         <button className="reset-button" data-testid="reset-demo" onClick={resetDemo}><RefreshCw/> Reset demo</button>
         <span className="user-avatar">JD</span>
@@ -680,7 +685,7 @@ export function ServiceOpsApp() {
       <main id="main-content" className={`main-content view-${view.toLowerCase().replaceAll(" ", "-")}`}>
         {session.scenario && view !== "Scenario Lab" && <div className="scenario-banner"><FlaskConical/><span>Viewing isolated scenario: <strong>{session.scenario.title}</strong></span><button onClick={() => navigate("Scenario Lab")}>Inspect comparison</button></div>}
         {view === "Overview" && <OverviewView state={state} onOpenOrder={openOrder}/>} 
-        {view === "Work Orders" && <WorkOrdersView state={state} selectedId={selectedId} setSelectedId={setSelectedId} updateState={updateState} notify={notify}/>} 
+        {view === "Work Orders" && <WorkOrdersView key={globalQuery} initialQuery={globalQuery} state={state} selectedId={selectedId} setSelectedId={setSelectedId} updateState={updateState} notify={notify}/>} 
         {view === "Dispatch" && <DispatchView state={state} onOpenOrder={openOrder}/>} 
         {view === "Inventory" && <InventoryView state={state}/>} 
         {view === "Scenario Lab" && <ScenarioLabView session={session} setSession={setSession} notify={notify}/>} 

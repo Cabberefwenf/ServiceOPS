@@ -39,7 +39,7 @@ test("technician callout scenario is isolated and reversible", async ({ page }, 
   await expect(page.getByText("WO-10470 · WO-10476")).toBeVisible();
   const plan = page.getByTestId("recovery-plan");
   await expect(plan).toContainText("WO-10476");
-  await expect(plan).toContainText("Reassign → Technician 14 (T-214)");
+  await expect(plan).toContainText("Reassign → Nadia Kowalski (T-214)");
   await expect(plan).toContainText("Unresolved: No feasible technician");
   await page.getByTestId("accept-recovery").click();
   await expect(page.getByTestId("recovery-accepted")).toBeVisible();
