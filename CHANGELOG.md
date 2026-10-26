@@ -1,6 +1,12 @@
 # Changelog
 
 
+## Guided tour, portfolio screenshots, accessibility, docs
+
+- Guided tour (7 steps, keyboard: Escape closes) from the header.
+- Real screenshots captured from the running app in `public/portfolio/` via `scripts/capture-portfolio.mjs`.
+- README capability table; data dictionary and testing docs updated for schema v2 and new flows.
+
 ## Operations screens (PR #4)
 - New screens: Scheduling (heuristic vs first-available baseline, measured runtime, accept), Technicians, Customers, Assets (PM overdue + service history), Service Agreements (calendars, contract SLA exceptions), Financials (invoice generation, payments; invoiced kept separate from cash), Automation Center (preview → approve/decline → receipts).
 - Work orders: real "New work order" intake (Zod-validated, agreement-derived SLA), triage/approval transitions, cancellation with confirmation, invoice from closed job, status filters, pagination.

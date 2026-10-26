@@ -8,6 +8,23 @@ ServiceOPS is a local-first field-service intelligence, dispatch, and operationa
 
 [Open ServiceOPS](https://serviceops-phi.vercel.app/) — public synthetic demonstration; no account or backend configuration required.
 
+![Operations overview](public/portfolio/overview.png)
+
+## What you can do
+
+| Area | Capability |
+| --- | --- |
+| Work orders | Create (Zod-validated intake, SLA from the customer's agreement), triage, approve, assign with an explainable recommendation, reserve parts, complete with a validated record, close, cancel, invoice |
+| Scheduling | Batch-schedule the ready queue with a deterministic greedy heuristic; compare against a naive first-available baseline; runtime measured in the browser; accept explicitly |
+| Agreements | Platinum/Gold/Standard tiers on 24×7, extended, and standard business calendars (holidays included); contract SLA computed in business minutes |
+| Financials | Invoices from recorded labor/parts/travel, partial and full payments; invoiced revenue and cash received reported separately (integer cents) |
+| Automation | Three threshold rules (invoice, reorder review, SLA escalation): propose → preview → approve/decline → receipt; idempotent, stale-trigger checked |
+| Scenario Lab | Six disruptions on an isolated copy of state, each with a recovery proposal; reset restores canonical state |
+| Entities | Technicians, customers, assets (PM overdue warnings, service history), inventory (filters, reservations), audit (type filter, search) |
+| Persistence | Browser localStorage, schema v2 with v1 migration, strict validation; tampered state is rejected with a notice |
+
+Heuristics are labeled as heuristics. Nothing in the app is machine learning or a proven optimum.
+
 ## Local development
 
 ```bash
@@ -15,13 +32,14 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`. Run `npm run verify` for lint, type checking, unit tests, and the production build; run `npm run test:e2e` for browser flows.
+Open `http://localhost:3000`. Run `npm run verify` for lint, type checking, unit tests, and the production build; run `npm run test:e2e` for browser flows. `node scripts/capture-portfolio.mjs` (with the dev server running) regenerates the screenshots in `public/portfolio/`.
 
 ## Architecture and status
 
 - [Architecture decision](docs/architecture/ADR-001-platform.md)
 - [Repository audit and continuation decision](docs/architecture/ADR-002-incremental-continuation.md)
 - [Product requirements](docs/product/requirements.md)
+- [Data dictionary](docs/data-dictionary.md)
 - [Testing strategy](docs/testing.md)
 - [Deployment guide](docs/deployment.md)
 

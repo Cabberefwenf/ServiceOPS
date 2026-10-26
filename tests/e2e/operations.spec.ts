@@ -69,3 +69,21 @@ test("entity screens render detail panels", async ({ page }) => {
   await page.getByTestId("inventory-health").selectOption("SHORTAGE");
   await expect(page.getByTestId("inventory-detail")).toContainText("CR-440");
 });
+
+test("guided tour walks through views and portfolio screenshots load", async ({ page }) => {
+  await page.getByTestId("start-tour").click();
+  await expect(page.getByTestId("tour")).toContainText("step 1 of 7");
+  await page.getByTestId("tour-next").click();
+  await expect(page.getByRole("heading", { level: 1, name: "Work orders" })).toBeVisible();
+  for (let i = 0; i < 5; i += 1) await page.getByTestId("tour-next").click();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity & audit" })).toBeVisible();
+  await page.getByTestId("tour-finish").click();
+  await expect(page.getByTestId("tour")).toHaveCount(0);
+  await page.getByTestId("nav-portfolio").click();
+  const images = page.locator(".portfolio-shots img");
+  await expect(images).toHaveCount(4);
+  for (const img of await images.all()) {
+    await img.scrollIntoViewIfNeeded();
+    await expect.poll(() => img.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth)).toBe(1440);
+  }
+});
