@@ -35,6 +35,9 @@ import {
   assignWorkOrder,
   availableQuantity,
   createScenario,
+  proposeReassignments,
+  RESOLUTION_CODES,
+  type CompletionInput,
   recommendTechnicians,
   reserveRequiredParts,
   scenarioCatalog,
@@ -292,8 +295,11 @@ function WorkOrderDetail({
   onPreview: () => void;
   onApprove: (technicianId: string) => void;
   onReserve: () => void;
-  onAdvance: () => void;
+  onAdvance: (completion?: CompletionInput) => void;
 }) {
+  const [labor, setLabor] = useState(String(order.estimatedDurationMinutes));
+  const [notes, setNotes] = useState("");
+  const [resolution, setResolution] = useState<CompletionInput["resolutionCode"]>("REPAIRED");
   const customer = state.customers.find((item) => item.id === order.customerId);
   const location = state.locations.find((item) => item.id === order.locationId);
   const asset = state.assets.find((item) => item.id === order.assetId);
@@ -310,7 +316,6 @@ function WorkOrderDetail({
         <div><div className="detail-id-row"><h2>{order.id}</h2><PriorityTag value={order.priority} /></div><p>{label(order.status)} · created {shortDate(order.createdAt)} at {time(order.createdAt)}</p></div>
         <Status value={order.status} />
       </div>
-      <div className="detail-tabs" role="tablist"><button className="active-tab" role="tab" aria-selected="true">Details</button><button role="tab">Recommendation</button><button role="tab">Parts & finance</button><button role="tab">Audit</button></div>
       <div className="detail-scroll">
         <section className="detail-summary">
           <div><small>Customer</small><strong>{customer?.name}</strong><span>{location?.name} · {location?.region}</span></div>
@@ -331,7 +336,7 @@ function WorkOrderDetail({
             {best ? (
               <div className="best-match">
                 <div className="match-top"><div><span className="avatar accent-avatar">{best.technicianName.split(" ").map((part) => part[0]).join("")}</span><div><strong>Recommend {best.technicianName} ({best.technicianId})</strong><small>{best.reasons.join(" · ")}</small></div></div><span className="best-label">Best feasible</span></div>
-                <div className="reason-grid"><span><ShieldCheck /> Qualification match</span><span><Clock3 /> Window available</span><span><Truck /> {best.travelMinutes} min estimated travel</span><span><PackageCheck /> Part ready</span></div>
+                <div className="reason-grid"><span><ShieldCheck /> Qualification match</span><span><Clock3 /> Window available</span><span><Truck /> {best.travelMinutes} min estimated travel</span><span><PackageCheck /> {order.requiredParts.length ? (best.reasons.includes("Required part is ready") ? "Parts available" : "Parts not available") : "No parts required"}</span></div>
               </div>
             ) : <EmptyState title="No feasible assignment" body="Review qualification, availability, appointment, and parts constraints." />}
             <div className="alternatives">
@@ -356,9 +361,17 @@ function WorkOrderDetail({
                 <button className="secondary-button" data-testid="reserve-parts" onClick={onReserve}><PackageCheck /> Reserve required part</button>
               )}
               {isReserved && <span className="success-note"><Check /> Parts reserved and dispatch-ready</span>}
-              {advance && (
-                <button className="primary-button" data-testid="advance-status" onClick={onAdvance}>
-                  {advance === "WORK_COMPLETED" ? "Complete & consume parts" : `Move to ${label(advance)}`} <ArrowRight />
+              {advance === "WORK_COMPLETED" && (
+                <form className="completion-form" aria-label="Completion record" onSubmit={(event) => { event.preventDefault(); onAdvance({ actualLaborMinutes: Number(labor), completionNotes: notes, resolutionCode: resolution }); }}>
+                  <label>Actual labor (minutes)<input data-testid="completion-labor" type="number" min={1} max={960} required value={labor} onChange={(event) => setLabor(event.target.value)} /></label>
+                  <label>Resolution code<select data-testid="completion-resolution" value={resolution} onChange={(event) => setResolution(event.target.value as CompletionInput["resolutionCode"])}>{RESOLUTION_CODES.map((code) => <option key={code} value={code}>{label(code)}</option>)}</select></label>
+                  <label className="completion-notes">Completion notes<textarea data-testid="completion-notes" required minLength={10} maxLength={1000} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="What was found, what was done, how it was verified" /></label>
+                  <button className="primary-button" data-testid="advance-status" type="submit">Complete &amp; consume parts <ArrowRight /></button>
+                </form>
+              )}
+              {advance && advance !== "WORK_COMPLETED" && (
+                <button className="primary-button" data-testid="advance-status" onClick={() => onAdvance()}>
+                  {`Move to ${label(advance)}`} <ArrowRight />
                 </button>
               )}
             </div>
@@ -366,7 +379,7 @@ function WorkOrderDetail({
         )}
         {order.status === "CLOSED" && (
           <section className="closed-receipt">
-            <Check /><div><h3>Service job closed</h3><p>Part usage, asset history, operational KPIs, audit history, and financial eligibility are updated.</p><strong>{formatCurrency(order.financials.recognizedRevenueCents)} recognized service revenue · invoice {label(order.financials.invoiceStatus)}</strong></div>
+            <Check /><div><h3>Service job closed</h3><p>Part usage, asset history, operational KPIs, audit history, and financial eligibility are updated.</p><p data-testid="completion-summary">{label(order.resolutionCode ?? "")} · {order.actualLaborMinutes} min labor · {order.completionNotes}</p><strong>{formatCurrency(order.financials.recognizedRevenueCents)} recognized service revenue · invoice {label(order.financials.invoiceStatus)}</strong></div>
           </section>
         )}
         <section className="lifecycle">
@@ -451,15 +464,16 @@ function WorkOrdersView({
       </div>
       {selected && (
         <WorkOrderDetail
+          key={selected.id}
           state={state}
           order={selected}
           proposalOpen={proposalOpen}
           onPreview={() => setProposalOpen(true)}
           onApprove={(technicianId) => apply(assignWorkOrder(state, selected.id, technicianId))}
           onReserve={() => apply(reserveRequiredParts(state, selected.id))}
-          onAdvance={() => {
+          onAdvance={(completion) => {
             const target = nextStatus[selected.status];
-            if (target) apply(transitionWorkOrder(state, selected.id, target));
+            if (target) apply(transitionWorkOrder(state, selected.id, target, completion));
           }}
         />
       )}
@@ -515,8 +529,14 @@ function ScenarioLabView({ session, setSession, notify }: { session: DemoSession
   const active = session.scenario;
   const before = calculateMetrics(active?.baseline ?? session.canonical);
   const after = calculateMetrics(active?.simulated ?? session.canonical);
+  const [calloutTech, setCalloutTech] = useState("T-104");
+  const busyTechnicians = session.canonical.technicians.filter((technician) => technician.assignments.length > 0);
+  const plan = useMemo(
+    () => (active?.id === "technician-callout" && !active.recoveryAccepted ? proposeReassignments(active.simulated, active.impactedWorkOrderIds) : null),
+    [active],
+  );
   function run(id: ScenarioId) {
-    const scenario = createScenario(session.canonical, id);
+    const scenario = createScenario(session.canonical, id, { technicianId: calloutTech });
     setSession({ ...session, scenario });
     notify(`${scenario.title} applied to isolated scenario state.`);
   }
@@ -525,6 +545,7 @@ function ScenarioLabView({ session, setSession, notify }: { session: DemoSession
       <div className="page-title-row"><div><h1>Scenario Lab</h1><p>Reproducible disruptions applied to an isolated copy of current canonical demo state.</p></div><span className="synthetic-label"><FlaskConical /> Synthetic simulation</span></div>
       <div className="scenario-layout">
         <section className="scenario-catalog" aria-label="Available scenarios">
+          <label className="callout-picker">Callout technician<select data-testid="callout-technician" value={calloutTech} onChange={(event) => setCalloutTech(event.target.value)}>{busyTechnicians.map((technician) => <option key={technician.id} value={technician.id}>{technician.id} · {technician.name} ({technician.assignments.length} jobs)</option>)}</select></label>
           {scenarioCatalog.map((scenario, index) => (
             <button key={scenario.id} className={active?.id === scenario.id ? "active-scenario" : ""} data-testid={scenario.id === "technician-callout" ? "scenario-technician-callout" : undefined} onClick={() => run(scenario.id)}>
               <span>0{index + 1}</span><div><strong>{scenario.title}</strong><p>{scenario.summary}</p></div><ChevronRight />
@@ -542,6 +563,14 @@ function ScenarioLabView({ session, setSession, notify }: { session: DemoSession
                 <div><small>Impacted records</small><span>0</span><ArrowRight/><strong>{active.impactedWorkOrderIds.length}</strong><em>isolated</em></div>
               </div>
               <div className="explanation-box"><AlertTriangle/><div><strong>Why the metrics changed</strong><p>{active.id === "technician-callout" ? "Removing a scheduled technician returns their jobs to the ready queue and reduces available field capacity. No canonical assignment was changed." : `${active.impactedWorkOrderIds.length} records or resources changed under the declared assumption. Every result is computed from scenario state, not random display values.`}</p></div></div>
+              {plan && (
+                <div className="recovery-plan" data-testid="recovery-plan">
+                  <strong>Proposed recovery (greedy feasible heuristic, not a proven optimum)</strong>
+                  <ul>{plan.proposals.map((proposal) => <li key={proposal.workOrderId} className={proposal.feasible ? "" : "danger-text"}><b>{proposal.workOrderId}</b> · {proposal.priority} · {proposal.feasible ? "Reassign → " : "Unresolved: "}{proposal.explanation}</li>)}</ul>
+                  <button className="primary-button" data-testid="accept-recovery" disabled={!plan.proposals.some((proposal) => proposal.feasible)} onClick={() => { setSession({ ...session, scenario: { ...active, simulated: plan.resultingState, recoveryAccepted: true } }); notify(`${plan.proposals.filter((proposal) => proposal.feasible).length} reassignment(s) applied to scenario state only.`); }}><Check /> Accept feasible reassignments (scenario only)</button>
+                </div>
+              )}
+              {active.recoveryAccepted && <p className="success-note" data-testid="recovery-accepted"><Check /> Recovery plan accepted inside the isolated scenario. Canonical demo is unchanged.</p>}
               {active.impactedWorkOrderIds.length > 0 && <div className="impacted-list"><strong>Impacted identifiers</strong><p>{active.impactedWorkOrderIds.slice(0, 12).join(" · ")}{active.impactedWorkOrderIds.length > 12 ? ` · +${active.impactedWorkOrderIds.length - 12} more` : ""}</p></div>}
             </>
           ) : <EmptyState title="Select a disruption" body="Each scenario starts from current canonical state, computes before-and-after metrics, and can be fully reversed." />}
