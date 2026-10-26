@@ -171,6 +171,7 @@ export interface ScenarioState {
   assumption: string;
   affectedTechnicianId?: string;
   impactedWorkOrderIds: string[];
+  recoveryAccepted?: boolean;
   baseline: OperationalState;
   simulated: OperationalState;
 }

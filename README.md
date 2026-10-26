@@ -20,6 +20,7 @@ Open `http://localhost:3000`. Run `npm run verify` for lint, type checking, unit
 ## Architecture and status
 
 - [Architecture decision](docs/architecture/ADR-001-platform.md)
+- [Repository audit and continuation decision](docs/architecture/ADR-002-incremental-continuation.md)
 - [Product requirements](docs/product/requirements.md)
 - [Testing strategy](docs/testing.md)
 - [Deployment guide](docs/deployment.md)

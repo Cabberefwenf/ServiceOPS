@@ -15,9 +15,18 @@ test("urgent work order can be assigned, reserved, completed, and reflected in a
   await expect(page.getByText("Sarah Chen assigned and schedule updated.")).toBeVisible();
   await page.getByTestId("reserve-parts").click();
   await expect(page.getByText("Parts reserved and dispatch-ready")).toBeVisible();
-  for (let index = 0; index < 5; index += 1) await page.getByTestId("advance-status").click();
+  await page.getByTestId("advance-status").click(); // Dispatched
+  await page.getByTestId("advance-status").click(); // In progress
+  // Completion without notes is blocked by validation (form is required).
+  await page.getByTestId("completion-labor").fill("140");
+  await page.getByTestId("completion-resolution").selectOption("REPLACED_COMPONENT");
+  await page.getByTestId("completion-notes").fill("Replaced compressor relay; chiller restarted and verified.");
+  await page.getByTestId("advance-status").click(); // Work completed
+  await page.getByTestId("advance-status").click(); // Quality review
+  await page.getByTestId("advance-status").click(); // Closed
   await expect(page.getByText("Service job closed")).toBeVisible();
   await expect(page.getByText("$574 recognized service revenue")).toBeVisible();
+  await expect(page.getByTestId("completion-summary")).toContainText("140 min labor");
   await page.getByTestId("nav-activity").click();
   await expect(page.getByText("Quality Review → Closed.")).toBeVisible();
 });
@@ -28,6 +37,12 @@ test("technician callout scenario is isolated and reversible", async ({ page }, 
   await page.getByTestId("scenario-technician-callout").click();
   await expect(page.getByText("Active isolated scenario")).toBeVisible();
   await expect(page.getByText("WO-10470 · WO-10476")).toBeVisible();
+  const plan = page.getByTestId("recovery-plan");
+  await expect(plan).toContainText("WO-10476");
+  await expect(plan).toContainText("Reassign → Technician 14 (T-214)");
+  await expect(plan).toContainText("Unresolved: No feasible technician");
+  await page.getByTestId("accept-recovery").click();
+  await expect(page.getByTestId("recovery-accepted")).toBeVisible();
   await page.getByTestId("reset-scenario").click();
   await expect(page.getByText("Select a disruption")).toBeVisible();
 });

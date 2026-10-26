@@ -78,7 +78,14 @@ describe("dispatch recommendation and work execution", () => {
     if (!reserved.ok) throw new Error(reserved.error);
     state = reserved.state;
     for (const target of ["DISPATCHED", "IN_PROGRESS", "WORK_COMPLETED", "QUALITY_REVIEW", "CLOSED"] as const) {
-      const result = transitionWorkOrder(state, "WO-10483", target);
+      const result = transitionWorkOrder(
+        state,
+        "WO-10483",
+        target,
+        target === "WORK_COMPLETED"
+          ? { actualLaborMinutes: 150, completionNotes: "Relay replaced and controls verified.", resolutionCode: "REPLACED_COMPONENT" }
+          : undefined,
+      );
       if (!result.ok) throw new Error(result.error);
       state = result.state;
     }
