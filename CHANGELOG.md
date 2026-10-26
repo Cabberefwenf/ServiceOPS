@@ -1,6 +1,13 @@
 # Changelog
 
 
+## Accessibility audit
+
+- axe-core Playwright audit across every view; fixed `scrollable-region-focusable` on all scrollable tables (focusable labelled regions).
+- Tour dialog moves focus to its primary action and restores focus to the trigger on close.
+- Portfolio screenshots re-captured against a production build.
+- `PLAYWRIGHT_BASE_URL` lets the e2e suite target a deployed URL.
+
 ## Guided tour, portfolio screenshots, accessibility, docs
 
 - Guided tour (7 steps, keyboard: Escape closes) from the header.
