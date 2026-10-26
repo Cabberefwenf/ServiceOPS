@@ -1,5 +1,12 @@
 # Changelog
 
+
+## Operations screens (PR #4)
+- New screens: Scheduling (heuristic vs first-available baseline, measured runtime, accept), Technicians, Customers, Assets (PM overdue + service history), Service Agreements (calendars, contract SLA exceptions), Financials (invoice generation, payments; invoiced kept separate from cash), Automation Center (preview → approve/decline → receipts).
+- Work orders: real "New work order" intake (Zod-validated, agreement-derived SLA), triage/approval transitions, cancellation with confirmation, invoice from closed job, status filters, pagination.
+- Overview: region filter, KPI drill-downs, first-time-fix chart now computed from closed jobs (was static), dispatch timeline positioned by real times.
+- Scenario Lab uses `proposeRecovery` for all six scenarios. Inventory and Activity gained search/filters and detail.
+
 ## Unreleased — feat/serviceops-foundation
 
 - Completion requires a validated record (actual labor minutes, resolution code, notes); labor cost uses entered minutes.

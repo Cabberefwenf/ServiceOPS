@@ -114,3 +114,25 @@ describe("automation center", () => {
     expect(proposeAutomations(declined.state).some((proposal) => proposal.key === reorder.key)).toBe(false);
   });
 });
+
+describe("work-order intake", async () => {
+  const { createWorkOrder, maintenanceDue } = await import("./intake");
+  it("creates a requested order with agreement-derived SLA and audit, and validates input", () => {
+    const state = createSeedState();
+    const asset = state.assets[0];
+    if (!asset) throw new Error("no asset");
+    const bad = createWorkOrder(state, { customerId: "C-0002", assetId: asset.id, priority: "HIGH", category: "Corrective maintenance", description: "Pump noise at startup", estimatedDurationMinutes: 90 });
+    expect(bad.ok).toBe(false);
+    const result = createWorkOrder(state, { customerId: asset.customerId, assetId: asset.id, priority: "HIGH", category: "Corrective maintenance", description: "Pump noise at startup", estimatedDurationMinutes: 90 });
+    if (!result.ok) throw new Error(result.error);
+    const order = result.state.workOrders[0];
+    expect(order?.id).toBe("WO-10484");
+    expect(order?.status).toBe("REQUESTED");
+    expect(Date.parse(order?.slaResolutionDue ?? "")).toBeGreaterThan(Date.parse(state.now));
+    expect(result.state.audit[0]?.type).toBe("WORK_ORDER_CREATED");
+    expect(checkIntegrity(result.state)).toEqual([]);
+  });
+  it("flags overdue preventive maintenance", () => {
+    expect(maintenanceDue({ lastServiceDate: "2026-01-01T00:00:00.000Z", maintenanceIntervalDays: 90 }, "2026-10-26T13:00:00.000Z").overdue).toBe(true);
+  });
+});

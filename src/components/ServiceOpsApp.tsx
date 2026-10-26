@@ -7,6 +7,9 @@ import {
   ArrowRight,
   BarChart3,
   Boxes,
+  Building2,
+  Plus,
+  Zap,
   CalendarDays,
   Check,
   ChevronRight,
@@ -16,7 +19,6 @@ import {
   Command,
   FileText,
   FlaskConical,
-  Gauge,
   History,
   LayoutDashboard,
   Menu,
@@ -30,12 +32,17 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { proposeRecovery } from "@/domain/planning";
+import { createWorkOrder, type NewWorkOrderInput } from "@/domain/intake";
+import { generateInvoice } from "@/domain/finance";
+import { contractSla } from "@/domain/sla";
 import { useEffect, useMemo, useState } from "react";
+import { ActivityView, AgreementsView, AssetsView, AutomationView, CustomersView, FinancialsView, InventoryView, SchedulingView, TechniciansView } from "./screens";
+import { EmptyState, Kpi, label, PriorityTag, shortDate, Status, time } from "./ui";
 import {
   assignWorkOrder,
   availableQuantity,
   createScenario,
-  proposeReassignments,
   RESOLUTION_CODES,
   type CompletionInput,
   recommendTechnicians,
@@ -45,12 +52,14 @@ import {
   transitionWorkOrder,
   type ScenarioId,
 } from "@/domain/operations";
-import { calculateMetrics, formatCurrency, metricDefinitions } from "@/domain/metrics";
+import { calculateMetrics, filterByRegion, formatCurrency, metricDefinitions, weeklyFirstTimeFix } from "@/domain/metrics";
 import { createSeedSession } from "@/domain/seed";
 import { loadSessionWithOutcome, saveSession } from "@/domain/session";
 import type {
   DemoSession,
   OperationalState,
+  OperationResult,
+  Region,
   Priority,
   WorkOrder,
   WorkOrderStatus,
@@ -60,7 +69,14 @@ type View =
   | "Overview"
   | "Work Orders"
   | "Dispatch"
+  | "Scheduling"
+  | "Technicians"
+  | "Customers"
+  | "Assets"
+  | "Agreements"
   | "Inventory"
+  | "Financials"
+  | "Automation"
   | "Scenario Lab"
   | "Analytics"
   | "Activity"
@@ -70,14 +86,40 @@ const navItems = [
   { label: "Overview" as const, icon: LayoutDashboard },
   { label: "Work Orders" as const, icon: FileText },
   { label: "Dispatch" as const, icon: Truck },
+  { label: "Scheduling" as const, icon: CalendarDays },
+  { label: "Technicians" as const, icon: Users },
+  { label: "Customers" as const, icon: Building2 },
+  { label: "Assets" as const, icon: Wrench },
+  { label: "Agreements" as const, icon: ShieldCheck },
   { label: "Inventory" as const, icon: Boxes },
+  { label: "Financials" as const, icon: CircleDollarSign },
+  { label: "Automation" as const, icon: Zap },
   { label: "Scenario Lab" as const, icon: FlaskConical },
   { label: "Analytics" as const, icon: BarChart3 },
   { label: "Activity" as const, icon: Activity },
   { label: "Portfolio" as const, icon: Archive },
 ];
 
+type OrderFilter = "ALL" | "OPEN" | "CRITICAL" | "SLA_RISK" | "OVERDUE" | "CLOSED";
+const orderFilterLabels: Record<OrderFilter, string> = { ALL: "All statuses", OPEN: "Open", CRITICAL: "Open critical", SLA_RISK: "SLA risk (≤4 h)", OVERDUE: "Past resolution due", CLOSED: "Closed" };
+function matchesFilter(order: WorkOrder, filter: OrderFilter, now: number) {
+  const open = order.status !== "CLOSED" && order.status !== "CANCELLED";
+  const due = Date.parse(order.slaResolutionDue);
+  switch (filter) {
+    case "ALL": return true;
+    case "OPEN": return open;
+    case "CRITICAL": return open && order.priority === "CRITICAL";
+    case "SLA_RISK": return open && due >= now && due - now <= 4 * 3_600_000;
+    case "OVERDUE": return open && due < now;
+    case "CLOSED": return order.status === "CLOSED";
+  }
+}
+
 const nextStatus: Partial<Record<WorkOrderStatus, WorkOrderStatus>> = {
+  REQUESTED: "TRIAGED",
+  TRIAGED: "APPROVED",
+  APPROVED: "READY_TO_SCHEDULE",
+  WAITING_FOR_CUSTOMER: "IN_PROGRESS",
   SCHEDULED: "DISPATCHED",
   DISPATCHED: "IN_PROGRESS",
   IN_PROGRESS: "WORK_COMPLETED",
@@ -85,60 +127,10 @@ const nextStatus: Partial<Record<WorkOrderStatus, WorkOrderStatus>> = {
   QUALITY_REVIEW: "CLOSED",
 };
 
-function label(value: string) {
-  return value.replaceAll("_", " ").toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function time(value?: string) {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: "America/New_York",
-  }).format(new Date(value));
-}
-
-function shortDate(value?: string) {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    timeZone: "America/New_York",
-  }).format(new Date(value));
-}
-
-function Status({ value }: { value: string }) {
-  return <span className={`status status-${value.toLowerCase()}`}>{label(value)}</span>;
-}
-
-function PriorityTag({ value }: { value: Priority }) {
-  return <span className={`priority priority-${value.toLowerCase()}`}>{label(value)}</span>;
-}
-
-function EmptyState({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="empty-state">
-      <Command aria-hidden="true" />
-      <strong>{title}</strong>
-      <p>{body}</p>
-    </div>
-  );
-}
-
-function Kpi({ label: title, value, detail, icon: Icon }: { label: string; value: string; detail: string; icon: typeof Gauge }) {
-  return (
-    <div className="kpi">
-      <Icon aria-hidden="true" />
-      <div>
-        <span>{title}</span>
-        <strong>{value}</strong>
-        <small>{detail}</small>
-      </div>
-    </div>
-  );
-}
-
 function DispatchTimeline({ state }: { state: OperationalState }) {
+  const dayStart = Date.parse(state.now) - 2 * 3_600_000;
+  const span = 11 * 3_600_000;
+  const pct = (iso: string) => Math.min(100, Math.max(0, ((Date.parse(iso) - dayStart) / span) * 100));
   const technicians = state.technicians
     .filter((technician) => technician.assignments.length > 0 || technician.status === "AVAILABLE")
     .slice(0, 6);
@@ -157,7 +149,7 @@ function DispatchTimeline({ state }: { state: OperationalState }) {
       <div className="timeline-grid">
         <div className="timeline-hours" aria-hidden="true">
           <span />
-          {[8, 9, 10, 11, 12, 1, 2, 3, 4, 5].map((hour) => <span key={hour}>{hour} {hour < 7 ? "PM" : "AM"}</span>)}
+          {[7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 5].map((hour) => <span key={hour}>{hour} {hour < 7 || hour === 12 ? "PM" : "AM"}</span>)}
         </div>
         {technicians.map((technician, rowIndex) => (
           <div className="timeline-row" key={technician.id}>
@@ -166,11 +158,11 @@ function DispatchTimeline({ state }: { state: OperationalState }) {
               <div><strong>{technician.name}</strong><small>{technician.region} · {label(technician.status)}</small></div>
             </div>
             <div className="timeline-track">
-              {technician.assignments.slice(0, 3).map((assignment, index) => (
+              {technician.assignments.filter((assignment) => pct(assignment.end) > 0 && pct(assignment.start) < 100).map((assignment, index) => (
                 <div
                   className={`job-block tone-${(rowIndex + index) % 3}`}
                   key={assignment.workOrderId}
-                  style={{ left: `${7 + index * 31 + rowIndex * 2}%`, width: `${21 + index * 4}%` }}
+                  style={{ left: `${pct(assignment.start)}%`, width: `${Math.max(4, pct(assignment.end) - pct(assignment.start))}%` }}
                 >
                   <strong>{assignment.workOrderId}</strong>
                   <span>{time(assignment.start)}–{time(assignment.end)}</span>
@@ -206,13 +198,22 @@ function ActivityRail({ state, limit = 7 }: { state: OperationalState; limit?: n
 }
 
 function OverviewView({
-  state,
+  state: fullState,
   onOpenOrder,
+  onDrill,
 }: {
   state: OperationalState;
   onOpenOrder: (id: string) => void;
+  onDrill: (filter: OrderFilter) => void;
 }) {
+  const [region, setRegion] = useState<"ALL" | Region>("ALL");
+  const state = useMemo(() => filterByRegion(fullState, region), [fullState, region]);
   const metrics = calculateMetrics(state);
+  const trend = weeklyFirstTimeFix(state);
+  const points = trend.map((week, index) => ({ ...week, x: (index / (trend.length - 1)) * 800, y: week.rate === null ? null : 160 - (week.rate / 100) * 160 }));
+  const drawn = points.filter((point): point is typeof point & { y: number } => point.y !== null);
+  const line = drawn.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(0)} ${point.y.toFixed(0)}`).join(" ");
+  const rates = trend.filter((week) => week.rate !== null).map((week) => (week.rate ?? 0).toFixed(0));
   const attention = state.workOrders
     .filter((order) => order.status !== "CLOSED" && order.status !== "CANCELLED")
     .sort((a, b) => {
@@ -224,9 +225,12 @@ function OverviewView({
     .slice(0, 5);
   return (
     <>
+      <div className="page-title-row"><div><h1>Operations overview</h1><p>Live state of the synthetic Northstar demo{region === "ALL" ? " across all regions" : ` · ${region} region`}.</p></div>
+        <select aria-label="Filter overview by region" data-testid="region-filter" value={region} onChange={(event) => setRegion(event.target.value as "ALL" | Region)}><option value="ALL">All regions</option><option>East</option><option>Central</option><option>West</option></select>
+      </div>
       <section className="kpi-rail" aria-label="Operational KPIs">
-        <Kpi label="Open work orders" value={String(metrics.openWorkOrders)} detail={`${metrics.urgentWorkOrders} critical`} icon={FileText} />
-        <Kpi label="SLA risk" value={String(metrics.slaRisk)} detail={`${metrics.overdueJobs} overdue`} icon={AlertTriangle} />
+        <Kpi label="Open work orders" value={String(metrics.openWorkOrders)} detail={`${metrics.urgentWorkOrders} critical`} icon={FileText} onClick={() => onDrill("OPEN")} testId="kpi-open" />
+        <Kpi label="SLA risk" value={String(metrics.slaRisk)} detail={`${metrics.overdueJobs} overdue`} icon={AlertTriangle} onClick={() => onDrill("SLA_RISK")} testId="kpi-sla" />
         <Kpi label="Technicians available" value={String(metrics.techniciansAvailable)} detail={`${metrics.techniciansAssigned} with assignments`} icon={Users} />
         <Kpi label="First-time fix" value={`${metrics.firstTimeFixRate.toFixed(0)}%`} detail="eligible closed jobs" icon={Wrench} />
         <Kpi label="Estimated revenue" value={formatCurrency(metrics.estimatedRevenueCents)} detail={`${formatCurrency(metrics.recognizedRevenueCents)} recognized`} icon={CircleDollarSign} />
@@ -236,7 +240,7 @@ function OverviewView({
           <section className="panel attention-panel">
             <div className="panel-heading">
               <div><span className="heading-icon danger"><AlertTriangle /></span><div><h2>Attention queue</h2><p>Highest-impact operational exceptions</p></div></div>
-              <button className="text-button" onClick={() => onOpenOrder(attention[0]?.id ?? "WO-10483")}>View work orders <ArrowRight /></button>
+              <button className="text-button" onClick={() => onDrill("OPEN")}>View open work orders <ArrowRight /></button>
             </div>
             <div className="data-table-wrap">
               <table className="data-table">
@@ -259,19 +263,17 @@ function OverviewView({
           <DispatchTimeline state={state} />
           <section className="panel performance-panel">
             <div className="panel-heading">
-              <div><span className="heading-icon"><BarChart3 /></span><div><h2>Service performance</h2><p>First-time fix, trailing eight weeks</p></div></div>
+              <div><span className="heading-icon"><BarChart3 /></span><div><h2>Service performance</h2><p>Weekly first-time fix from closed jobs, trailing eight weeks</p></div></div>
               <span className="metric-highlight">{metrics.firstTimeFixRate.toFixed(1)}%</span>
             </div>
-            <div className="chart-area" role="img" aria-label="First-time fix rate rises from 78 to 86 percent over eight weeks">
+            {drawn.length ? <div className="chart-area" role="img" aria-label={`Weekly first-time fix rate over the last ${trend.length} weeks: ${rates.join(", ")} percent`}>
               <div className="y-labels"><span>100%</span><span>75%</span><span>50%</span><span>25%</span></div>
               <svg viewBox="0 0 800 160" preserveAspectRatio="none" aria-hidden="true">
-                <defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#25d2f4" stopOpacity=".22"/><stop offset="1" stopColor="#25d2f4" stopOpacity="0"/></linearGradient></defs>
-                <path d="M0 116 L110 105 L220 91 L330 82 L440 79 L550 61 L660 68 L800 48 L800 160 L0 160 Z" fill="url(#area)"/>
-                <path d="M0 116 L110 105 L220 91 L330 82 L440 79 L550 61 L660 68 L800 48" fill="none" stroke="#25d2f4" strokeWidth="3"/>
-                {[0,110,220,330,440,550,660,800].map((x, index) => <circle key={x} cx={x} cy={[116,105,91,82,79,61,68,48][index]} r="5" fill="#071521" stroke="#25d2f4" strokeWidth="3"/>)}
+                <path d={line} fill="none" stroke="#25d2f4" strokeWidth="3"/>
+                {drawn.map((point) => <circle key={point.x} cx={point.x} cy={point.y} r="5" fill="#071521" stroke="#25d2f4" strokeWidth="3"/>)}
               </svg>
-              <div className="x-labels"><span>Aug 31</span><span>Sep 14</span><span>Sep 28</span><span>Oct 12</span><span>Oct 26</span></div>
-            </div>
+              <div className="x-labels">{trend.filter((_, index) => index % 2 === 1).map((week) => <span key={week.weekEnding}>{shortDate(week.weekEnding)}</span>)}</div>
+            </div> : <EmptyState title="No closed jobs in range" body="Weekly first-time fix appears once jobs close in this region." />}
           </section>
         </div>
         <ActivityRail state={state} />
@@ -288,7 +290,11 @@ function WorkOrderDetail({
   onApprove,
   onReserve,
   onAdvance,
+  onCancel,
+  onInvoice,
 }: {
+  onCancel: () => void;
+  onInvoice: () => void;
   state: OperationalState;
   order: WorkOrder;
   proposalOpen: boolean;
@@ -309,7 +315,10 @@ function WorkOrderDetail({
     const item = state.inventory.find((candidate) => candidate.sku === requirement.sku);
     return (item?.reservedBy[order.id] ?? 0) >= requirement.quantity;
   });
-  const advance = nextStatus[order.status];
+  const advance = order.status === "WAITING_FOR_PARTS" ? (order.assignedTechnicianId ? "IN_PROGRESS" : "READY_TO_SCHEDULE") : nextStatus[order.status];
+  const sla = contractSla(state, order);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const cancellable = ["REQUESTED", "TRIAGED", "APPROVED", "READY_TO_SCHEDULE", "SCHEDULED", "WAITING_FOR_CUSTOMER", "WAITING_FOR_PARTS"].includes(order.status);
   return (
     <aside className="work-order-detail" aria-label={`Work order ${order.id} details`}>
       <div className="detail-header">
@@ -320,7 +329,7 @@ function WorkOrderDetail({
         <section className="detail-summary">
           <div><small>Customer</small><strong>{customer?.name}</strong><span>{location?.name} · {location?.region}</span></div>
           <div><small>Asset</small><strong>{asset?.category} · {asset?.model}</strong><span>{asset?.manufacturer} · {asset?.serialNumber}</span></div>
-          <div className="sla-box"><small>SLA resolution due</small><strong>{time(order.slaResolutionDue)}</strong><span>{shortDate(order.slaResolutionDue)} · response tracked separately</span></div>
+          <div className="sla-box"><small>SLA resolution due</small><strong>{time(order.slaResolutionDue)}</strong><span>{shortDate(order.slaResolutionDue)} · response tracked separately</span><span data-testid="contract-sla">{sla.agreementId ? `Contract ${sla.agreementId}: resolution ${label(sla.resolution)}${sla.resolutionDue ? ` (due ${shortDate(sla.resolutionDue)} ${time(sla.resolutionDue)}, ${sla.calendarName})` : ""}` : "No service agreement covers this job"}</span></div>
         </section>
         <div className="requirements-grid">
           <section><small>Required skills</small>{order.requiredSkills.map((skill) => <strong key={skill}><Check /> {skill}</strong>)}{order.requiredCertifications.map((cert) => <strong key={cert}><ShieldCheck /> {cert}</strong>)}</section>
@@ -353,7 +362,7 @@ function WorkOrderDetail({
             {!proposalOpen && best && <button className="primary-button full-button" data-testid="preview-assignment" onClick={onPreview}><ClipboardCheck /> Preview assignment</button>}
           </section>
         )}
-        {order.status !== "READY_TO_SCHEDULE" && order.status !== "CLOSED" && (
+        {order.status !== "READY_TO_SCHEDULE" && order.status !== "CLOSED" && order.status !== "CANCELLED" && (
           <section className="execution-card">
             <div className="section-title"><div><Wrench /><div><h3>Service execution</h3><p>Assigned to {technicianName(state, order.assignedTechnicianId)}</p></div></div><Status value={order.status} /></div>
             <div className="execution-actions">
@@ -379,7 +388,13 @@ function WorkOrderDetail({
         )}
         {order.status === "CLOSED" && (
           <section className="closed-receipt">
-            <Check /><div><h3>Service job closed</h3><p>Part usage, asset history, operational KPIs, audit history, and financial eligibility are updated.</p><p data-testid="completion-summary">{label(order.resolutionCode ?? "")} · {order.actualLaborMinutes} min labor · {order.completionNotes}</p><strong>{formatCurrency(order.financials.recognizedRevenueCents)} recognized service revenue · invoice {label(order.financials.invoiceStatus)}</strong></div>
+            <Check /><div><h3>Service job closed</h3><p>Part usage, asset history, operational KPIs, audit history, and financial eligibility are updated.</p><p data-testid="completion-summary">{label(order.resolutionCode ?? "")} · {order.actualLaborMinutes} min labor · {order.completionNotes}</p><strong>{formatCurrency(order.financials.recognizedRevenueCents)} recognized service revenue · invoice {label(order.financials.invoiceStatus)}</strong>{order.financials.invoiceStatus === "ELIGIBLE" && <button className="secondary-button" data-testid="generate-invoice" onClick={onInvoice}><FileText /> Generate invoice</button>}</div>
+          </section>
+        )}
+        {order.status === "CANCELLED" && <section className="closed-receipt"><X /><div><h3>Work order cancelled</h3><p>Assignments and part reservations were released. The audit trail keeps the record.</p></div></section>}
+        {cancellable && (
+          <section className="cancel-zone">
+            {confirmCancel ? <><p>Cancel {order.id}? This releases any assignment and reservations and cannot be undone in this session.</p><button className="danger-button" data-testid="confirm-cancel" onClick={onCancel}>Confirm cancellation</button><button className="text-button" onClick={() => setConfirmCancel(false)}>Keep work order</button></> : <button className="text-button" data-testid="cancel-work-order" onClick={() => setConfirmCancel(true)}><X /> Cancel work order</button>}
           </section>
         )}
         <section className="lifecycle">
@@ -397,6 +412,28 @@ function WorkOrderDetail({
   );
 }
 
+function NewWorkOrderForm({ state, onSubmit, onCancel }: { state: OperationalState; onSubmit: (input: NewWorkOrderInput) => void; onCancel: () => void }) {
+  const [customerId, setCustomerId] = useState(state.customers[0]?.id ?? "");
+  const assets = state.assets.filter((asset) => asset.customerId === customerId);
+  const [assetId, setAssetId] = useState(assets[0]?.id ?? "");
+  const [priority, setPriority] = useState<Priority>("MEDIUM");
+  const [category, setCategory] = useState<NewWorkOrderInput["category"]>("Corrective maintenance");
+  const [description, setDescription] = useState("");
+  const [duration, setDuration] = useState("120");
+  return (
+    <form className="panel new-order-form" aria-label="New work order" data-testid="new-work-order-form" onSubmit={(event) => { event.preventDefault(); onSubmit({ customerId, assetId, priority, category, description, estimatedDurationMinutes: Number(duration) }); }}>
+      <label>Customer<select data-testid="new-customer" value={customerId} onChange={(event) => { setCustomerId(event.target.value); setAssetId(state.assets.find((asset) => asset.customerId === event.target.value)?.id ?? ""); }}>{state.customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></label>
+      <label>Asset<select data-testid="new-asset" required value={assetId} onChange={(event) => setAssetId(event.target.value)}>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.id} · {asset.category} · {asset.model}</option>)}</select></label>
+      <label>Priority<select data-testid="new-priority" value={priority} onChange={(event) => setPriority(event.target.value as Priority)}><option>LOW</option><option>MEDIUM</option><option>HIGH</option><option>CRITICAL</option></select></label>
+      <label>Type<select value={category} onChange={(event) => setCategory(event.target.value as NewWorkOrderInput["category"])}><option>Corrective maintenance</option><option>Preventive maintenance</option></select></label>
+      <label>Estimated minutes<input type="number" min={30} max={480} required value={duration} onChange={(event) => setDuration(event.target.value)} /></label>
+      <label className="wide-field">Problem description<input data-testid="new-description" required minLength={8} maxLength={200} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What is the customer reporting?" /></label>
+      <div className="form-actions"><button className="primary-button" type="submit" data-testid="create-work-order"><Check /> Create work order</button><button className="text-button" type="button" onClick={onCancel}>Cancel</button></div>
+      <small>SLA due dates are computed from the customer&apos;s service agreement and business calendar.</small>
+    </form>
+  );
+}
+
 function WorkOrdersView({
   state,
   selectedId,
@@ -404,8 +441,10 @@ function WorkOrdersView({
   updateState,
   notify,
   initialQuery = "",
+  initialFilter = "ALL",
 }: {
   initialQuery?: string;
+  initialFilter?: OrderFilter;
   state: OperationalState;
   selectedId: string;
   setSelectedId: (id: string) => void;
@@ -414,11 +453,15 @@ function WorkOrdersView({
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [priority, setPriority] = useState("ALL");
+  const [filter, setFilter] = useState<OrderFilter>(initialFilter);
+  const [shown, setShown] = useState(20);
+  const [creating, setCreating] = useState(false);
   const [proposalOpen, setProposalOpen] = useState(false);
+  const now = Date.parse(state.now);
   const orders = state.workOrders
     .filter((order) => {
       const customer = state.customers.find((item) => item.id === order.customerId)?.name ?? "";
-      return `${order.id} ${order.description} ${customer}`.toLowerCase().includes(query.toLowerCase()) && (priority === "ALL" || order.priority === priority);
+      return `${order.id} ${order.description} ${customer}`.toLowerCase().includes(query.toLowerCase()) && (priority === "ALL" || order.priority === priority) && matchesFilter(order, filter, now);
     })
     .sort((a, b) => Number(b.id === "WO-10483") - Number(a.id === "WO-10483") || Date.parse(b.createdAt) - Date.parse(a.createdAt));
   const selected = state.workOrders.find((order) => order.id === selectedId) ?? orders[0];
@@ -434,18 +477,20 @@ function WorkOrdersView({
       <div className="work-orders-list">
         <div className="page-title-row">
           <div><h1>Work orders</h1><p>Manage validated service execution across every customer and site.</p></div>
-          <button className="primary-button"><FileText /> New work order</button>
+          <button className="primary-button" data-testid="new-work-order" aria-expanded={creating} onClick={() => setCreating(!creating)}><Plus /> New work order</button>
         </div>
         <div className="filters-row">
           <label className="search-field"><Search /><span className="sr-only">Search work orders</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search orders, customers, or assets" /></label>
+          <select aria-label="Filter by status" data-testid="status-filter" value={filter} onChange={(event) => { setFilter(event.target.value as OrderFilter); setShown(20); }}>{(Object.keys(orderFilterLabels) as OrderFilter[]).map((key) => <option key={key} value={key}>{orderFilterLabels[key]}</option>)}</select>
           <select aria-label="Filter by priority" value={priority} onChange={(event) => setPriority(event.target.value)}><option value="ALL">All priorities</option><option>CRITICAL</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select>
           <span className="result-count">{orders.length.toLocaleString()} records</span>
         </div>
+        {creating && <NewWorkOrderForm state={state} onCancel={() => setCreating(false)} onSubmit={(input) => { const result = createWorkOrder(state, input); apply(result); if (result.ok) { setCreating(false); setFilter("ALL"); setQuery(""); setSelectedId(result.state.workOrders[0]?.id ?? ""); } }} />}
         <div className="data-table-wrap work-order-table-wrap">
           <table className="data-table work-order-table">
             <thead><tr><th>Work order</th><th>Priority</th><th>Customer / site</th><th>Asset</th><th>Status</th><th>Due</th></tr></thead>
             <tbody>
-              {orders.slice(0, 20).map((order) => {
+              {orders.slice(0, shown).map((order) => {
                 const customer = state.customers.find((item) => item.id === order.customerId);
                 const location = state.locations.find((item) => item.id === order.locationId);
                 const asset = state.assets.find((item) => item.id === order.assetId);
@@ -462,7 +507,9 @@ function WorkOrdersView({
               })}
             </tbody>
           </table>
+          {orders.length === 0 && <EmptyState title="No matching work orders" body="Clear the search or filters to see more records." />}
         </div>
+        {orders.length > shown && <button className="secondary-button more-button" onClick={() => setShown(shown + 25)}>Show {Math.min(25, orders.length - shown)} more ({orders.length - shown} remaining)</button>}
       </div>
       {selected && (
         <WorkOrderDetail
@@ -473,8 +520,10 @@ function WorkOrdersView({
           onPreview={() => setProposalOpen(true)}
           onApprove={(technicianId) => apply(assignWorkOrder(state, selected.id, technicianId))}
           onReserve={() => apply(reserveRequiredParts(state, selected.id))}
+          onCancel={() => apply(transitionWorkOrder(state, selected.id, "CANCELLED"))}
+          onInvoice={() => apply(generateInvoice(state, selected.id))}
           onAdvance={(completion) => {
-            const target = nextStatus[selected.status];
+            const target = selected.status === "WAITING_FOR_PARTS" ? (selected.assignedTechnicianId ? "IN_PROGRESS" : "READY_TO_SCHEDULE") : nextStatus[selected.status];
             if (target) apply(transitionWorkOrder(state, selected.id, target, completion));
           }}
         />
@@ -509,24 +558,6 @@ function DispatchView({ state, onOpenOrder }: { state: OperationalState; onOpenO
   );
 }
 
-function InventoryView({ state }: { state: OperationalState }) {
-  const items = state.inventory.slice().sort((a, b) => availableQuantity(a) - availableQuantity(b)).slice(0, 30);
-  return (
-    <>
-      <div className="page-title-row"><div><h1>Inventory & parts</h1><p>On-hand, reservation, availability, reorder exposure, and service usage.</p></div><span className="definition-chip">Available = on-hand − reserved</span></div>
-      <section className="panel inventory-panel">
-        <div className="data-table-wrap"><table className="data-table"><thead><tr><th>SKU</th><th>Description</th><th>Warehouse</th><th>On hand</th><th>Reserved</th><th>Available</th><th>Reorder point</th><th>Status</th></tr></thead><tbody>
-          {items.map((item) => {
-            const reserved = Object.values(item.reservedBy).reduce((sum, quantity) => sum + quantity, 0);
-            const available = availableQuantity(item);
-            return <tr key={item.sku} className={item.sku === "CR-440" ? "selected-row" : ""}><td className="link-cell">{item.sku}</td><td><strong>{item.description}</strong><small>{item.category}</small></td><td>{item.warehouse}</td><td>{item.onHand}</td><td>{reserved}</td><td><strong>{available}</strong></td><td>{item.reorderPoint}</td><td><Status value={available === 0 ? "SHORTAGE" : available <= item.reorderPoint ? "REORDER_REVIEW" : "HEALTHY"} /></td></tr>;
-          })}
-        </tbody></table></div>
-      </section>
-    </>
-  );
-}
-
 function ScenarioLabView({ session, setSession, notify }: { session: DemoSession; setSession: (session: DemoSession) => void; notify: (message: string) => void }) {
   const active = session.scenario;
   const before = calculateMetrics(active?.baseline ?? session.canonical);
@@ -534,7 +565,7 @@ function ScenarioLabView({ session, setSession, notify }: { session: DemoSession
   const [calloutTech, setCalloutTech] = useState("T-104");
   const busyTechnicians = session.canonical.technicians.filter((technician) => technician.assignments.length > 0);
   const plan = useMemo(
-    () => (active?.id === "technician-callout" && !active.recoveryAccepted ? proposeReassignments(active.simulated, active.impactedWorkOrderIds) : null),
+    () => (active && !active.recoveryAccepted ? proposeRecovery(active) : null),
     [active],
   );
   function run(id: ScenarioId) {
@@ -567,9 +598,9 @@ function ScenarioLabView({ session, setSession, notify }: { session: DemoSession
               <div className="explanation-box"><AlertTriangle/><div><strong>Why the metrics changed</strong><p>{active.id === "technician-callout" ? "Removing a scheduled technician returns their jobs to the ready queue and reduces available field capacity. No canonical assignment was changed." : `${active.impactedWorkOrderIds.length} records or resources changed under the declared assumption. Every result is computed from scenario state, not random display values.`}</p></div></div>
               {plan && (
                 <div className="recovery-plan" data-testid="recovery-plan">
-                  <strong>Proposed recovery (greedy feasible heuristic, not a proven optimum)</strong>
-                  <ul>{plan.proposals.map((proposal) => <li key={proposal.workOrderId} className={proposal.feasible ? "" : "danger-text"}><b>{proposal.workOrderId}</b> · {proposal.priority} · {proposal.feasible ? "Reassign → " : "Unresolved: "}{proposal.explanation}</li>)}</ul>
-                  <button className="primary-button" data-testid="accept-recovery" disabled={!plan.proposals.some((proposal) => proposal.feasible)} onClick={() => { setSession({ ...session, scenario: { ...active, simulated: plan.resultingState, recoveryAccepted: true } }); notify(`${plan.proposals.filter((proposal) => proposal.feasible).length} reassignment(s) applied to scenario state only.`); }}><Check /> Accept feasible reassignments (scenario only)</button>
+                  <strong>Proposed recovery · {plan.method}</strong>
+                  {plan.steps.length === 0 ? <p>No recovery actions are needed: nothing in this scenario is unassigned or blocked.</p> : <ul>{plan.steps.slice(0, 25).map((step) => <li key={step.workOrderId} className={step.feasible ? "" : "danger-text"}><b>{step.workOrderId}</b> · {step.action}{step.feasible ? " · " : ": "}{step.explanation}</li>)}{plan.steps.length > 25 && <li>+{plan.steps.length - 25} more steps</li>}</ul>}
+                  <button className="primary-button" data-testid="accept-recovery" disabled={!plan.steps.some((step) => step.feasible)} onClick={() => { setSession({ ...session, scenario: { ...active, simulated: plan.resultingState, recoveryAccepted: true } }); notify(`${plan.steps.filter((step) => step.feasible).length} recovery step(s) applied to scenario state only.`); }}><Check /> Accept feasible recovery steps (scenario only)</button>
                 </div>
               )}
               {active.recoveryAccepted && <p className="success-note" data-testid="recovery-accepted"><Check /> Recovery plan accepted inside the isolated scenario. Canonical demo is unchanged.</p>}
@@ -596,10 +627,6 @@ function AnalyticsView({ state }: { state: OperationalState }) {
   );
 }
 
-function ActivityView({ state }: { state: OperationalState }) {
-  return <><div className="page-title-row"><div><h1>Activity & audit</h1><p>Append-only receipts for every state-changing demo command.</p></div><span className="definition-chip">{state.audit.length.toLocaleString()} events</span></div><ActivityRail state={state} limit={30}/></>;
-}
-
 function PortfolioView({ onLaunch }: { onLaunch: () => void }) {
   return (
     <div className="portfolio-view">
@@ -616,6 +643,7 @@ export function ServiceOpsApp() {
   const [selectedId, setSelectedId] = useState("WO-10483");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [globalQuery, setGlobalQuery] = useState("");
+  const [drill, setDrill] = useState<OrderFilter>("ALL");
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
   const state = session.scenario?.simulated ?? session.canonical;
   const metrics = useMemo(() => calculateMetrics(state), [state]);
@@ -646,6 +674,11 @@ export function ServiceOpsApp() {
     if (session.scenario) setSession({ ...session, scenario: { ...session.scenario, simulated: next } });
     else setSession({ ...session, canonical: next });
   }
+  function commit(result: OperationResult) {
+    if (result.ok) { updateState(result.state); notify(result.message); }
+    else notify(result.error, "error");
+  }
+  const screen = { state, commit, onOpenOrder: openOrder };
   function navigate(next: View) {
     setView(next);
     setMobileOpen(false);
@@ -668,7 +701,7 @@ export function ServiceOpsApp() {
         <button className="mobile-menu-button" aria-label="Open navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)}><Menu/></button>
         <button className="brand" onClick={() => navigate("Overview")}><span>Service</span><b>OPS</b></button>
         <span className="synthetic-label"><FlaskConical/> Synthetic demo</span>
-        <form className="global-search" role="search" onSubmit={(event) => { event.preventDefault(); const value = new FormData(event.currentTarget).get("q"); setGlobalQuery(String(value ?? "")); navigate("Work Orders"); }}><Search aria-hidden="true"/><label htmlFor="global-search-input" className="sr-only">Search work orders</label><input id="global-search-input" name="q" data-testid="global-search" placeholder="Search work orders by ID, description, or customer…" /></form>
+        <form className="global-search" role="search" onSubmit={(event) => { event.preventDefault(); const value = new FormData(event.currentTarget).get("q"); setGlobalQuery(String(value ?? "")); setDrill("ALL"); navigate("Work Orders"); }}><Search aria-hidden="true"/><label htmlFor="global-search-input" className="sr-only">Search work orders</label><input id="global-search-input" name="q" data-testid="global-search" placeholder="Search work orders by ID, description, or customer…" /></form>
         <span className="header-filter" title="Synthetic demo clock"><CalendarDays aria-hidden="true"/> Mon, Oct 26 · 9:00 AM ET</span>
         <span className="header-health"><span/> {metrics.slaRisk} SLA risks</span>
         <button className="reset-button" data-testid="reset-demo" onClick={resetDemo}><RefreshCw/> Reset demo</button>
@@ -684,13 +717,20 @@ export function ServiceOpsApp() {
       {mobileOpen && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
       <main id="main-content" className={`main-content view-${view.toLowerCase().replaceAll(" ", "-")}`}>
         {session.scenario && view !== "Scenario Lab" && <div className="scenario-banner"><FlaskConical/><span>Viewing isolated scenario: <strong>{session.scenario.title}</strong></span><button onClick={() => navigate("Scenario Lab")}>Inspect comparison</button></div>}
-        {view === "Overview" && <OverviewView state={state} onOpenOrder={openOrder}/>} 
-        {view === "Work Orders" && <WorkOrdersView key={globalQuery} initialQuery={globalQuery} state={state} selectedId={selectedId} setSelectedId={setSelectedId} updateState={updateState} notify={notify}/>} 
+        {view === "Overview" && <OverviewView state={state} onOpenOrder={openOrder} onDrill={(filter) => { setGlobalQuery(""); setDrill(filter); navigate("Work Orders"); }}/>} 
+        {view === "Work Orders" && <WorkOrdersView key={`${globalQuery}|${drill}`} initialQuery={globalQuery} initialFilter={drill} state={state} selectedId={selectedId} setSelectedId={setSelectedId} updateState={updateState} notify={notify}/>} 
         {view === "Dispatch" && <DispatchView state={state} onOpenOrder={openOrder}/>} 
-        {view === "Inventory" && <InventoryView state={state}/>} 
+        {view === "Scheduling" && <SchedulingView {...screen}/>} 
+        {view === "Technicians" && <TechniciansView {...screen}/>} 
+        {view === "Customers" && <CustomersView {...screen}/>} 
+        {view === "Assets" && <AssetsView {...screen}/>} 
+        {view === "Agreements" && <AgreementsView {...screen}/>} 
+        {view === "Inventory" && <InventoryView {...screen}/>} 
+        {view === "Financials" && <FinancialsView {...screen}/>} 
+        {view === "Automation" && <AutomationView {...screen}/>} 
         {view === "Scenario Lab" && <ScenarioLabView session={session} setSession={setSession} notify={notify}/>} 
         {view === "Analytics" && <AnalyticsView state={state}/>} 
-        {view === "Activity" && <ActivityView state={state}/>} 
+        {view === "Activity" && <ActivityView {...screen}/>} 
         {view === "Portfolio" && <PortfolioView onLaunch={() => navigate("Overview")}/>} 
       </main>
       {toast && <div className={`toast toast-${toast.tone}`} role="status"><span>{toast.tone === "success" ? <Check/> : <AlertTriangle/>}</span>{toast.message}<button aria-label="Dismiss notification" onClick={() => setToast(null)}><X/></button></div>}
