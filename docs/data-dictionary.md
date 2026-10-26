@@ -10,6 +10,9 @@ The deterministic generator in `src/domain/seed.ts` creates 120 customers, 200 l
 | Technician | `T-###` | owns non-overlapping assignment records |
 | Work order | `WO-#####` | references customer, location, asset, optional technician, and parts |
 | Inventory item | SKU | tracks on-hand and per-work-order reservations |
+| Service agreement | `AG-####` | belongs to a customer; tier and business calendar drive contract SLA |
+| Invoice | `INV-#####` | generated from a closed work order; carries payments |
+| Automation rule / receipt | rule id | threshold rule; each approve/decline writes a receipt and audit event |
 | Audit event | `EV-#####` | records actor, time, entity, command type, and receipt detail |
 
-Money is integer cents. Time is stored as ISO 8601 and displayed in the demo&apos;s Eastern time context. Available stock is always `onHand − sum(reservedBy)`. Persisted demo sessions use schema version 1.
+Money is integer cents. Time is stored as ISO 8601 and displayed in the demo's Eastern time context. Available stock is always `onHand − sum(reservedBy)`. Persisted demo sessions use schema version 2 (version 1 sessions are migrated on load; invalid or tampered state is rejected).

@@ -396,3 +396,13 @@ h3 { font-size: 14px; line-height: 1.3; }
 .method-note { color: var(--muted); font-size: 13px; margin: 4px 4px 12px; }
 .sla-box span[data-testid="contract-sla"] { display: block; margin-top: 4px; }
 @media (max-width: 980px) { .split-layout, .new-order-form { grid-template-columns: 1fr; } .new-order-form .wide-field { grid-column: auto; } .detail-panel { position: static; } }
+.tour-card { position: fixed; right: 24px; bottom: 24px; z-index: 60; width: min(380px, calc(100vw - 32px)); background: #0b1d2b; border: 1px solid var(--accent, #25d2f4); border-radius: var(--radius); padding: 16px; box-shadow: 0 18px 50px rgba(0,0,0,.45); }
+.tour-card h2 { margin: 6px 0; font-size: 16px; }
+.tour-card p { color: var(--muted); font-size: 13px; }
+.tour-card small { color: var(--muted); }
+.tour-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+.portfolio-shots { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.portfolio-shots figure { margin: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.portfolio-shots img { width: 100%; height: auto; display: block; }
+.portfolio-shots figcaption { font-size: 12px; color: var(--muted); padding: 8px; }
+@media (max-width: 980px) { .portfolio-shots { grid-template-columns: 1fr; } }

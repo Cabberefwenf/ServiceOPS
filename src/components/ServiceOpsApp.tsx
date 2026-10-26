@@ -631,7 +631,41 @@ function PortfolioView({ onLaunch }: { onLaunch: () => void }) {
   return (
     <div className="portfolio-view">
       <section className="portfolio-copy"><span className="portfolio-mark"><Command/> ServiceOPS</span><h1>Field service intelligence, dispatch, and operational control.</h1><p>A browser-based operations command platform demonstrating validated work-order lifecycles, explainable scheduling, parts integrity, service economics, deterministic automation, and reversible disruption modeling.</p><div className="portfolio-actions"><button className="primary-button" onClick={onLaunch}>Open live demo <ArrowRight/></button><a className="secondary-button" href="https://github.com/Cabberefwenf/ServiceOPS" target="_blank" rel="noreferrer">Private repository</a></div><small>All displayed companies, people, sites, assets, work orders, and financials are synthetic.</small></section>
-      <section className="portfolio-proof"><div><small>Architecture</small><strong>Local-first, versioned state</strong><p>No account, database, provider, or paid API is required.</p></div><div><small>Operational integrity</small><strong>Atomic domain commands</strong><p>Transitions, schedules, reservations, costs, and audit events move together.</p></div><div><small>Human authority</small><strong>Preview before execution</strong><p>Recommendations explain constraints and require explicit approval.</p></div><div><small>Technology</small><strong>Next.js · React · TypeScript</strong><p>Zod boundaries, Vitest domain checks, and Playwright browser verification.</p></div></section>
+      <section className="portfolio-proof"><div><small>Architecture</small><strong>Local-first, versioned state</strong><p>No account, database, provider, or paid API is required.</p></div><div><small>Operational integrity</small><strong>Atomic domain commands</strong><p>Transitions, schedules, reservations, costs, and audit events move together.</p></div><div><small>Human authority</small><strong>Preview before execution</strong><p>Recommendations explain constraints and require explicit approval.</p></div><div><small>Technology</small><strong>Next.js · React · TypeScript</strong><p>Zod boundaries, Vitest domain checks, and Playwright browser verification.</p></div></section>{/* Plain <img>: static PNGs, avoids paid image-optimization usage. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <section className="portfolio-shots" aria-label="Screenshots of the running demo">{[["overview","Operations overview with KPIs, attention queue, and dispatch timeline"],["work-order","Work-order detail with explainable assignment recommendation"],["scheduling","Scheduling run compared to a first-available baseline"],["scenario","Scenario Lab technician-callout recovery plan"]].map(([file, alt]) => <figure key={file}><img src={`/portfolio/${file}.png`} alt={alt} loading="lazy" width={1440} height={900}/><figcaption>{alt}</figcaption></figure>)}</section>
+    </div>
+  );
+}
+
+const tourSteps: Array<{ view: View; title: string; body: string }> = [
+  { view: "Overview", title: "Operations overview", body: "KPIs are computed from the current demo state. Click a KPI to drill into matching work orders, or filter by region." },
+  { view: "Work Orders", title: "Work-order lifecycle", body: "WO-10483 is a critical chiller failure. Preview the recommended technician, approve, reserve the part, and complete it with a validated record." },
+  { view: "Scheduling", title: "Batch scheduling", body: "Run the greedy heuristic over the ready queue and compare it to a naive first-available baseline before accepting anything." },
+  { view: "Scenario Lab", title: "Disruption modeling", body: "Apply a technician callout or parts shortage to an isolated copy of state, review the recovery plan, and reset without touching canonical data." },
+  { view: "Financials", title: "Invoices and cash", body: "Closed jobs become invoiceable. Invoiced revenue and cash received are tracked separately in integer cents." },
+  { view: "Automation", title: "Human-approved automation", body: "Threshold rules propose actions with an exact preview. Nothing executes without approval, and every decision leaves a receipt." },
+  { view: "Activity", title: "Audit trail", body: "Every state-changing command appends an audit event. Filter by type or search by entity." },
+];
+
+function GuidedTour({ step, onStep, onClose }: { step: number; onStep: (index: number) => void; onClose: () => void }) {
+  const current = tourSteps[step];
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+  if (!current) return null;
+  return (
+    <div className="tour-card" role="dialog" aria-modal="false" aria-labelledby="tour-title" data-testid="tour">
+      <small>Guided tour · step {step + 1} of {tourSteps.length}</small>
+      <h2 id="tour-title">{current.title}</h2>
+      <p>{current.body}</p>
+      <div className="tour-actions">
+        <button className="text-button" onClick={onClose}>End tour</button>
+        <button className="secondary-button" disabled={step === 0} onClick={() => onStep(step - 1)}>Back</button>
+        {step < tourSteps.length - 1 ? <button className="primary-button" data-testid="tour-next" autoFocus onClick={() => onStep(step + 1)}>Next <ArrowRight /></button> : <button className="primary-button" data-testid="tour-finish" onClick={onClose}><Check /> Finish</button>}
+      </div>
     </div>
   );
 }
@@ -644,6 +678,7 @@ export function ServiceOpsApp() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [globalQuery, setGlobalQuery] = useState("");
   const [drill, setDrill] = useState<OrderFilter>("ALL");
+  const [tourStep, setTourStep] = useState<number | null>(null);
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
   const state = session.scenario?.simulated ?? session.canonical;
   const metrics = useMemo(() => calculateMetrics(state), [state]);
@@ -704,6 +739,7 @@ export function ServiceOpsApp() {
         <form className="global-search" role="search" onSubmit={(event) => { event.preventDefault(); const value = new FormData(event.currentTarget).get("q"); setGlobalQuery(String(value ?? "")); setDrill("ALL"); navigate("Work Orders"); }}><Search aria-hidden="true"/><label htmlFor="global-search-input" className="sr-only">Search work orders</label><input id="global-search-input" name="q" data-testid="global-search" placeholder="Search work orders by ID, description, or customer…" /></form>
         <span className="header-filter" title="Synthetic demo clock"><CalendarDays aria-hidden="true"/> Mon, Oct 26 · 9:00 AM ET</span>
         <span className="header-health"><span/> {metrics.slaRisk} SLA risks</span>
+        <button className="reset-button" data-testid="start-tour" onClick={() => { setTourStep(0); navigate("Overview"); }}><Sparkles/> Tour</button>
         <button className="reset-button" data-testid="reset-demo" onClick={resetDemo}><RefreshCw/> Reset demo</button>
         <span className="user-avatar">JD</span>
       </header>
@@ -731,6 +767,7 @@ export function ServiceOpsApp() {
         {view === "Scenario Lab" && <ScenarioLabView session={session} setSession={setSession} notify={notify}/>} 
         {view === "Analytics" && <AnalyticsView state={state}/>} 
         {view === "Activity" && <ActivityView {...screen}/>} 
+        {tourStep !== null && <GuidedTour step={tourStep} onClose={() => setTourStep(null)} onStep={(index) => { setTourStep(index); const target = tourSteps[index]; if (target) { if (target.view === "Work Orders") setSelectedId("WO-10483"); navigate(target.view); } }} />}
         {view === "Portfolio" && <PortfolioView onLaunch={() => navigate("Overview")}/>} 
       </main>
       {toast && <div className={`toast toast-${toast.tone}`} role="status"><span>{toast.tone === "success" ? <Check/> : <AlertTriangle/>}</span>{toast.message}<button aria-label="Dismiss notification" onClick={() => setToast(null)}><X/></button></div>}
