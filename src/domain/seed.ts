@@ -12,21 +12,46 @@ import type {
   WorkOrder,
   WorkOrderStatus,
 } from "./types";
+import { createAgreements, createCalendars, createHistoricalInvoices } from "./seed-commercial";
 
 export const DEMO_NOW = "2026-10-26T13:00:00.000Z";
 
-const customerNames = [
-  "Riverton Medical Center",
-  "Oakridge University",
-  "Maple Foods",
-  "Pinecrest Retail",
-  "Summit Data Center",
-  "Northstar Facility",
-  "Lakeside Manufacturing",
-  "City Utilities",
-  "Cedar Valley Foods",
-  "Ridgeview Hospital",
+// All names below are fictional and generated for the synthetic demo.
+const customerPrefixes = [
+  "Riverton", "Oakridge", "Maple", "Pinecrest", "Summit", "Harbor", "Lakeside", "Granite",
+  "Cedar Valley", "Ridgeview", "Ironwood", "Bluewater",
 ];
+const customerTypes = [
+  "Medical Center", "University", "Foods", "Retail Group", "Data Center", "Cold Storage",
+  "Manufacturing", "Utilities", "Logistics", "Hospital",
+];
+// Unique prefix/type pairing: index i maps to (i % 12, (i % 12 + 3 * floor(i / 12)) % 10).
+function customerName(index: number) {
+  const prefix = customerPrefixes[index % customerPrefixes.length] ?? "Northstar";
+  const type = customerTypes[(index + Math.floor(index / customerPrefixes.length)) % customerTypes.length] ?? "Facility";
+  return `${prefix} ${type}`;
+}
+const firstNames = [
+  "Alicia", "Ben", "Carmen", "Darnell", "Elena", "Farid", "Grace", "Hector", "Ingrid", "Jamal",
+  "Kenji", "Lena", "Mateo", "Nadia", "Omar", "Paula", "Quinn", "Rosa", "Samir", "Tessa",
+  "Umar", "Vera", "Wes", "Ximena", "Yusuf", "Zoe", "Andre", "Bianca", "Colin", "Diana",
+  "Emeka", "Fiona", "Gavin", "Hana", "Isaac", "Joy", "Kofi", "Lucia", "Miles", "Noor",
+];
+const lastNames = [
+  "Ramirez", "Okafor", "Lindqvist", "Brennan", "Haddad", "Novak", "Castillo", "Mbeki", "Sorensen",
+  "Tanaka", "Delgado", "Whitfield", "Kowalski", "Petrov", "Abara", "Moreau", "Fischer", "Quintero",
+  "Ashworth", "Varga", "Nakamura", "Ellison", "Rahman", "Dubois", "Santos", "Holloway", "Iqbal",
+];
+const openStatusCycle: WorkOrderStatus[] = [
+  "REQUESTED",
+  "TRIAGED",
+  "APPROVED",
+  "READY_TO_SCHEDULE",
+  "READY_TO_SCHEDULE",
+  "WAITING_FOR_CUSTOMER",
+  "WAITING_FOR_PARTS",
+];
+export const OPEN_ORDER_COUNT = 80;
 const assetCategories = [
   "HVAC System",
   "Industrial Pump",
@@ -201,9 +226,8 @@ export function createSeedState(): OperationalState {
   const random = mulberry32(10_262_026);
   const customers: Customer[] = Array.from({ length: 120 }, (_, index) => ({
     id: `C-${String(index + 1).padStart(4, "0")}`,
-    name:
-      customerNames[index % customerNames.length] ?? `Northstar Customer ${index + 1}`,
-    contactName: `Operations Contact ${index + 1}`,
+    name: customerName(index),
+    contactName: `${firstNames[(index * 7) % firstNames.length]} ${lastNames[(index * 5) % lastNames.length]}`,
     email: `ops${index + 1}@example.invalid`,
     billingTerms: (["NET_30", "NET_45", "PREPAID"] as const)[index % 3] ?? "NET_30",
   }));
@@ -238,7 +262,7 @@ export function createSeedState(): OperationalState {
     const category = assetCategories[index % assetCategories.length] ?? "HVAC System";
     technicians.push({
       id: `T-${String(201 + index)}`,
-      name: `Technician ${String(index + 1).padStart(2, "0")}`,
+      name: `${firstNames[index % firstNames.length]} ${lastNames[(index * 3) % lastNames.length]}`,
       region: regions[index % regions.length] ?? "Central",
       skills: [skillByCategory[category] ?? "General Service"],
       certifications: index % 3 === 0 ? ["OSHA 30"] : [],
@@ -286,8 +310,20 @@ export function createSeedState(): OperationalState {
     const asset = assets[index % assets.length];
     const location = locations.find((item) => item.id === asset?.locationId) ?? locations[0];
     const category = asset?.category ?? "HVAC System";
-    const status = index < 18 ? activeStatuses[(index - 1) % activeStatuses.length] ?? "REQUESTED" : "CLOSED";
-    const createdHours = index < 18 ? -(1 + (index % 7)) : -Math.floor(random() * 24 * 120);
+    const status =
+      index < 18
+        ? activeStatuses[(index - 1) % activeStatuses.length] ?? "REQUESTED"
+        : index < OPEN_ORDER_COUNT
+          ? openStatusCycle[index % openStatusCycle.length] ?? "REQUESTED"
+          : "CLOSED";
+    // Preserve the historical random stream: indexes >= 18 always draw a value.
+    const historicalHours = index < 18 ? 0 : -Math.floor(random() * 24 * 120);
+    const createdHours =
+      index < 18
+        ? -(1 + (index % 7))
+        : index < OPEN_ORDER_COUNT
+          ? -(2 + (index % 7) + (index % 5) * 6)
+          : historicalHours;
     const duration = 60 + Math.floor(random() * 6) * 30;
     const priority = priorities[Math.floor(random() * priorities.length)] ?? "MEDIUM";
     const isClosed = status === "CLOSED";
@@ -402,7 +438,7 @@ export function createSeedState(): OperationalState {
   ];
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     organizationName: "Northstar Industrial Service Group",
     now: DEMO_NOW,
     customers,
@@ -411,10 +447,14 @@ export function createSeedState(): OperationalState {
     technicians,
     workOrders,
     inventory: createInventory(),
+    calendars: createCalendars(),
+    agreements: createAgreements(customers, locations),
+    invoices: createHistoricalInvoices(workOrders, customers, DEMO_NOW),
+    automationReceipts: [],
     audit,
   };
 }
 
 export function createSeedSession(): DemoSession {
-  return { schemaVersion: 1, canonical: createSeedState(), scenario: null };
+  return { schemaVersion: 2, canonical: createSeedState(), scenario: null };
 }

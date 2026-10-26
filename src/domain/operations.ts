@@ -590,5 +590,17 @@ export function checkIntegrity(state: OperationalState): IntegrityIssue[] {
       if (quantity <= 0) issues.push({ entity: "inventory", id: item.sku, problem: `non-positive reservation ${orderId}` });
     }
   }
+  const calendars = new Set((state.calendars ?? []).map((item) => item.id));
+  for (const agreement of state.agreements ?? []) {
+    if (!customers.has(agreement.customerId)) issues.push({ entity: "agreement", id: agreement.id, problem: "orphan customer" });
+    if (!calendars.has(agreement.calendarId)) issues.push({ entity: "agreement", id: agreement.id, problem: "unknown calendar" });
+  }
+  for (const invoice of state.invoices ?? []) {
+    if (!orders.has(invoice.workOrderId)) issues.push({ entity: "invoice", id: invoice.id, problem: "orphan work order" });
+    const lineTotal = invoice.lines.reduce((sum, line) => sum + line.amountCents, 0);
+    if (lineTotal !== invoice.totalCents) issues.push({ entity: "invoice", id: invoice.id, problem: "lines do not sum to total" });
+    if (invoice.paidCents < 0 || invoice.paidCents > invoice.totalCents)
+      issues.push({ entity: "invoice", id: invoice.id, problem: "paid amount outside 0…total" });
+  }
   return issues;
 }
