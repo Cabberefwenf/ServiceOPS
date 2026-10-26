@@ -361,7 +361,8 @@ export function createSeedState(): OperationalState {
       order.completionNotes = "Synthetic service record completed and reviewed.";
       order.financials.recognizedRevenueCents =
         order.financials.billableLaborCents + order.financials.travelChargeCents;
-      order.financials.invoiceStatus = "GENERATED";
+      // A small, deterministic share of recent closures is still awaiting invoicing.
+      order.financials.invoiceStatus = index % 23 === 0 ? "ELIGIBLE" : "GENERATED";
     }
     workOrders.push(order);
   }

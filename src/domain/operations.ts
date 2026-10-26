@@ -25,7 +25,7 @@ const transitions: Record<WorkOrderStatus, WorkOrderStatus[]> = {
   CANCELLED: [],
 };
 
-function clone(state: OperationalState): OperationalState {
+export function clone(state: OperationalState): OperationalState {
   return structuredClone(state);
 }
 
@@ -41,7 +41,7 @@ export function availableQuantity(item: InventoryItem) {
   return item.onHand - reservedQuantity(item);
 }
 
-function appendAudit(
+export function appendAudit(
   state: OperationalState,
   entityId: string,
   type: string,
@@ -468,7 +468,7 @@ export function isTechnicianAvailable(technician: Technician) {
   return technician.status === "AVAILABLE" || technician.status === "ON_JOB";
 }
 
-const priorityRank: Record<WorkOrder["priority"], number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+export const priorityRank: Record<WorkOrder["priority"], number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
 
 export interface ReassignmentProposal {
   workOrderId: string;
