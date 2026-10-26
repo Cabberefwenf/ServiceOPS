@@ -114,3 +114,22 @@ export function formatCurrency(cents: number) {
     maximumFractionDigits: 0,
   }).format(cents / 100);
 }
+
+/** First-time-fix rate per trailing week, computed from closed orders' closedAt. Weeks with no eligible jobs return null. */
+export function weeklyFirstTimeFix(state: OperationalState, weeks = 8): Array<{ weekEnding: string; rate: number | null; jobs: number }> {
+  const now = Date.parse(state.now);
+  const week = 7 * 86_400_000;
+  return Array.from({ length: weeks }, (_, index) => {
+    const end = now - (weeks - 1 - index) * week;
+    const jobs = state.workOrders.filter((order) => order.status === "CLOSED" && order.visits > 0 && order.closedAt && Date.parse(order.closedAt) > end - week && Date.parse(order.closedAt) <= end);
+    const fixed = jobs.filter((order) => order.visits === 1 && !order.reopened).length;
+    return { weekEnding: new Date(end).toISOString(), rate: jobs.length ? (fixed / jobs.length) * 100 : null, jobs: jobs.length };
+  });
+}
+
+/** Restricts operational records to one region (by service location / technician home region). */
+export function filterByRegion(state: OperationalState, region: "ALL" | "East" | "Central" | "West"): OperationalState {
+  if (region === "ALL") return state;
+  const locationIds = new Set(state.locations.filter((location) => location.region === region).map((location) => location.id));
+  return { ...state, workOrders: state.workOrders.filter((order) => locationIds.has(order.locationId)), technicians: state.technicians.filter((technician) => technician.region === region) };
+}
