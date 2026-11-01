@@ -55,6 +55,7 @@ import {
 import { calculateMetrics, filterByRegion, formatCurrency, metricDefinitions, weeklyFirstTimeFix } from "@/domain/metrics";
 import { createSeedSession } from "@/domain/seed";
 import { loadSessionWithOutcome, saveSession } from "@/domain/session";
+import { siteConfig } from "@/app/site";
 import type {
   DemoSession,
   OperationalState,
@@ -630,8 +631,9 @@ function AnalyticsView({ state }: { state: OperationalState }) {
 function PortfolioView({ onLaunch }: { onLaunch: () => void }) {
   return (
     <div className="portfolio-view">
-      <section className="portfolio-copy"><span className="portfolio-mark"><Command/> ServiceOPS</span><h1>Field service intelligence, dispatch, and operational control.</h1><p>A browser-based operations command platform demonstrating validated work-order lifecycles, explainable scheduling, parts integrity, service economics, deterministic automation, and reversible disruption modeling.</p><div className="portfolio-actions"><button className="primary-button" onClick={onLaunch}>Open live demo <ArrowRight/></button><a className="secondary-button" href="https://github.com/Cabberefwenf/ServiceOPS" target="_blank" rel="noreferrer">Private repository</a></div><small>All displayed companies, people, sites, assets, work orders, and financials are synthetic.</small></section>
+      <section className="portfolio-copy"><span className="portfolio-mark"><Command/> ServiceOPS</span><h1>Field service intelligence, dispatch, and operational control.</h1><p>A browser-based operations command platform demonstrating validated work-order lifecycles, explainable scheduling, parts integrity, service economics, deterministic automation, and reversible disruption modeling.</p><div className="portfolio-actions"><button className="primary-button" onClick={onLaunch}>Open live demo <ArrowRight/></button><a className="secondary-button" data-testid="portfolio-home-link" href={siteConfig.portfolioUrl}>Back to Veldarium Worth</a><span className="repository-status" data-testid="repository-status"><ShieldCheck/> Private source repository</span></div><small>All displayed companies, people, sites, assets, work orders, and financials are synthetic.</small></section>
       <section className="portfolio-proof"><div><small>Architecture</small><strong>Local-first, versioned state</strong><p>No account, database, provider, or paid API is required.</p></div><div><small>Operational integrity</small><strong>Atomic domain commands</strong><p>Transitions, schedules, reservations, costs, and audit events move together.</p></div><div><small>Human authority</small><strong>Preview before execution</strong><p>Recommendations explain constraints and require explicit approval.</p></div><div><small>Technology</small><strong>Next.js · React · TypeScript</strong><p>Zod boundaries, Vitest domain checks, and Playwright browser verification.</p></div></section>{/* Plain <img>: static PNGs, avoids paid image-optimization usage. */}
+      <section className="capability-boundaries" aria-labelledby="capability-boundaries-title"><div className="boundary-heading"><small>Demonstration boundary</small><h2 id="capability-boundaries-title">What is real, simulated, and intentionally not connected</h2></div><div><strong>Functional in this demo</strong><p>Lifecycle validation, technician constraints, scheduling, reservations, SLA calculations, invoices, partial payments, automation receipts, audit events, and reset recovery.</p></div><div><strong>Synthetic and simulated</strong><p>Northstar records, the demo clock, operational disruptions, recommendations, and browser-persisted scenarios are deterministic fictional data.</p></div><div><strong>Future integration boundary</strong><p>Authentication, multi-user coordination, live ERP/CRM feeds, production databases, notifications, telemetry, and provider-backed optimization are not connected.</p></div></section>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <section className="portfolio-shots" aria-label="Screenshots of the running demo">{[["overview","Operations overview with KPIs, attention queue, and dispatch timeline"],["work-order","Work-order detail with explainable assignment recommendation"],["scheduling","Scheduling run compared to a first-available baseline"],["scenario","Scenario Lab technician-callout recovery plan"]].map(([file, alt]) => <figure key={file}><img src={`/portfolio/${file}.png`} alt={alt} loading="lazy" width={1440} height={900}/><figcaption>{alt}</figcaption></figure>)}</section>
     </div>
@@ -741,6 +743,7 @@ export function ServiceOpsApp() {
         <button className="mobile-menu-button" aria-label="Open navigation" aria-expanded={mobileOpen} onClick={() => setMobileOpen(true)}><Menu/></button>
         <button className="brand" onClick={() => navigate("Overview")}><span>Service</span><b>OPS</b></button>
         <span className="synthetic-label"><FlaskConical/> Synthetic demo</span>
+        <a className="portfolio-return-link" data-testid="portfolio-return" href={siteConfig.portfolioUrl}>Veldarium Worth</a>
         <form className="global-search" role="search" onSubmit={(event) => { event.preventDefault(); const value = new FormData(event.currentTarget).get("q"); setGlobalQuery(String(value ?? "")); setDrill("ALL"); navigate("Work Orders"); }}><Search aria-hidden="true"/><label htmlFor="global-search-input" className="sr-only">Search work orders</label><input id="global-search-input" name="q" data-testid="global-search" placeholder="Search work orders by ID, description, or customer…" /></form>
         <span className="header-filter" title="Synthetic demo clock"><CalendarDays aria-hidden="true"/> Mon, Oct 26 · 9:00 AM ET</span>
         <span className="header-health"><span/> {metrics.slaRisk} SLA risks</span>
@@ -753,7 +756,7 @@ export function ServiceOpsApp() {
         <nav aria-label="Primary navigation">
           {navItems.map(({ label: item, icon: Icon }) => <button key={item} data-testid={`nav-${item.toLowerCase().replaceAll(" ", "-")}`} className={view === item ? "nav-active" : ""} onClick={() => navigate(item)}><Icon/><span>{item}</span></button>)}
         </nav>
-        <div className="sidebar-footer"><strong>Northstar</strong><span>Industrial Service Group</span><p>Field service for a more reliable tomorrow.</p><small>Synthetic records only.<br/>No real customers or people.</small></div>
+        <div className="sidebar-footer"><strong>Northstar</strong><span>Industrial Service Group</span><p>Field service for a more reliable tomorrow.</p><small>Synthetic records only.<br/>No real customers or people.</small><a href={siteConfig.portfolioUrl}>Back to Veldarium Worth</a></div>
       </aside>
       {mobileOpen && <button className="nav-backdrop" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
       <main id="main-content" className={`main-content view-${view.toLowerCase().replaceAll(" ", "-")}`}>

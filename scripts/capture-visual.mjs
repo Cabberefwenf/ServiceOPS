@@ -9,6 +9,19 @@ await mkdir(outputDirectory, { recursive: true });
 const projectDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = 3010;
 const baseURL = `http://127.0.0.1:${port}`;
+async function loadPortfolioImages(page) {
+  for (const image of await page.locator(".portfolio-shots img").all()) {
+    await image.scrollIntoViewIfNeeded();
+    await image.evaluate((node) => {
+      if (node.complete && node.naturalWidth > 0) return;
+      return new Promise((resolve, reject) => {
+        node.addEventListener("load", resolve, { once: true });
+        node.addEventListener("error", reject, { once: true });
+      });
+    });
+  }
+  await page.evaluate(() => window.scrollTo(0, 0));
+}
 const server = spawn(
   process.execPath,
   [path.join(projectDirectory, "node_modules/next/dist/bin/next"), "dev", "-p", String(port)],
@@ -41,6 +54,10 @@ await page.screenshot({ path: path.join(outputDirectory, "serviceops-overview.pn
 await page.getByTestId("nav-work-orders").click();
 await page.getByTestId("selected-work-order").click();
 await page.screenshot({ path: path.join(outputDirectory, "serviceops-work-order.png") });
+await page.getByTestId("nav-portfolio").click();
+await page.getByTestId("portfolio-home-link").waitFor();
+await loadPortfolioImages(page);
+await page.screenshot({ path: path.join(outputDirectory, "serviceops-portfolio.png"), fullPage: true });
 await desktop.close();
 
 const mobile = await browser.newContext({ viewport: { width: 412, height: 915 }, deviceScaleFactor: 1 });
@@ -49,10 +66,14 @@ await mobilePage.emulateMedia({ reducedMotion: "reduce" });
 await mobilePage.goto(baseURL, { waitUntil: "networkidle" });
 await mobilePage.getByRole("button", { name: "Open navigation" }).click();
 await mobilePage.screenshot({ path: path.join(outputDirectory, "serviceops-mobile-nav.png") });
+await mobilePage.getByTestId("nav-portfolio").click();
+await mobilePage.getByTestId("portfolio-home-link").waitFor();
+await loadPortfolioImages(mobilePage);
+await mobilePage.screenshot({ path: path.join(outputDirectory, "serviceops-mobile-portfolio.png"), fullPage: true });
 await mobile.close();
 await browser.close();
 server.kill();
 
-for (const name of ["serviceops-overview.png", "serviceops-work-order.png", "serviceops-mobile-nav.png"]) {
+for (const name of ["serviceops-overview.png", "serviceops-work-order.png", "serviceops-portfolio.png", "serviceops-mobile-nav.png", "serviceops-mobile-portfolio.png"]) {
   process.stdout.write(`${path.join(outputDirectory, name)}\n`);
 }

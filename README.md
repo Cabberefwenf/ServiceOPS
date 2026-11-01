@@ -6,7 +6,9 @@ ServiceOPS is a local-first field-service intelligence, dispatch, and operationa
 
 ## Live demo
 
-[Open ServiceOPS](https://serviceops-phi.vercel.app/) — public synthetic demonstration; no account or backend configuration required.
+[Open ServiceOPS](https://serviceops-phi.vercel.app) — canonical public synthetic demonstration; no account or backend configuration required.
+
+[Return to Veldarium Worth](https://veldariumworth.com/) for the broader portfolio.
 
 ![Operations overview](public/portfolio/overview.png)
 
@@ -23,16 +25,26 @@ ServiceOPS is a local-first field-service intelligence, dispatch, and operationa
 | Entities | Technicians, customers, assets (PM overdue warnings, service history), inventory (filters, reservations), audit (type filter, search) |
 | Persistence | Browser localStorage, schema v2 with v1 migration, strict validation; tampered state is rejected with a notice |
 
+## Demonstration boundary
+
+| Boundary | What it means |
+| --- | --- |
+| Functional | Lifecycle guards, scheduling constraints, reservations, SLA calculations, invoices, partial payments, approval receipts, audit events, and reset recovery execute against shared in-browser state. |
+| Synthetic | Northstar, its people and records, the demo clock, disruption scenarios, and recommendations are deterministic fictional data. |
+| Not connected | Authentication, multi-user coordination, production databases, ERP/CRM feeds, notifications, telemetry, and provider-backed optimization are outside this public demonstration. |
+
 Heuristics are labeled as heuristics. Nothing in the app is machine learning or a proven optimum.
 
 ## Local development
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`. Run `npm run verify` for lint, type checking, unit tests, and the production build; run `npm run test:e2e` for browser flows. `node scripts/capture-portfolio.mjs` (with the dev server running) regenerates the screenshots in `public/portfolio/`.
+Open `http://localhost:3000`. Run `npm run verify` for lint, type checking, unit tests, and the production build; run `npm run test:e2e` for the desktop/mobile browser suite with its verified 60-second per-test budget. `node scripts/capture-portfolio.mjs` (with the dev server running) regenerates the screenshots in `public/portfolio/`.
+
+The public root is the only indexable application page. It publishes canonical, Open Graph, Twitter, robots, sitemap, manifest, favicon, and `SoftwareApplication` structured metadata using `https://serviceops-phi.vercel.app` as the single canonical URL.
 
 ## Architecture and status
 
