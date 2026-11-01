@@ -1,5 +1,14 @@
 # Changelog
 
+## ServiceOPS-301 — public flagship hardening
+
+- Added one verified canonical production URL with Open Graph, Twitter, robots, sitemap, manifest, favicon, social preview, and `SoftwareApplication` structured data.
+- Added accurate Veldarium Worth return navigation and replaced the public-facing private-repository link with a visibility status.
+- Clarified functional, synthetic, and unconnected capability boundaries in the application and README.
+- Improved dense operational text, status labels, lifecycle readability, responsive navigation, and mobile touch targets.
+- Added publication and portfolio-integration Playwright coverage; standardized the browser gate on a 60-second per-test timeout.
+- Documented the production-zero/development-only dependency audit result without forcing incompatible upgrades.
+
 
 ## Accessibility audit
 
